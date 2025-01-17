@@ -1,23 +1,43 @@
 # Installation and Setup Instructions
 
+## Dependencies
+
+### macOS
+
+**Install Homebrew (if not already installed)**
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+**Install `espeak-ng`**
+```bash
+brew install espeak-ng
+```
+
+**Verify the installation**
+```bash
+espeak-ng --version
+```
+
+
 ## General Instructions
 
 ### macOS and Linux
 
-1. **Install `uv`**:  
+1. **Install `uv`**
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 
-2. **Install dependencies**:  
+2. **Install dependencies**
    ```bash
    uv sync
    ```
 
 ### Windows
 
-1. **Install `uv`**:  
-   Open PowerShell and run:  
+1. **Install `uv`**
+   Open PowerShell and run
    ```powershell
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
@@ -26,7 +46,6 @@
    ```powershell
    uv sync
    ```
-
 ---
 
 ## Optional Setup: Using Ollama for Local Models

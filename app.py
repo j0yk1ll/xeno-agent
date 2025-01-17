@@ -38,7 +38,7 @@ from src.utils.settings_manager import SettingsManager
 ###############################################################################
 LOGGING_LEVEL = logging.DEBUG
 
-# We'll place logs in ~/.xeno/app.log
+# We'll place logs in ~/.xeno/app.log or C:\Users\<username>\.xeno/app.log
 xeno_dir = Path.home() / ".xeno"
 xeno_dir.mkdir(parents=True, exist_ok=True)  # Ensure the folder exists
 
@@ -51,7 +51,7 @@ logger.setLevel(LOGGING_LEVEL)
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setLevel(LOGGING_LEVEL)
 
-# File handler with absolute path in ~/.xeno
+# File handler with absolute path in ~/.xeno or C:\Users\<username>\.xeno
 try:
     file_handler = logging.FileHandler(log_file_path, mode="w")
     file_handler.setLevel(LOGGING_LEVEL)

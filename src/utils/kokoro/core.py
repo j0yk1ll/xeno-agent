@@ -2,6 +2,14 @@ import phonemizer
 import re
 import torch
 import time
+import os
+
+if os.name == 'nt':  # Only on Windows systems
+    try:
+        from phonemizer.backend.espeak.wrapper import EspeakWrapper
+        EspeakWrapper.set_library(r'C:\Program Files\eSpeak NG\libespeak-ng.dll')
+    except ImportError as e:
+        raise RuntimeError("EspeakWrapper is not available or could not be loaded on this system.") from e
 
 def split_num(num):
     num = num.group()
