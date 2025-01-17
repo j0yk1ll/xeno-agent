@@ -17,6 +17,7 @@ dependencies = [
     "pandas>=2.2.3",
     "phonemizer>=3.3.0",
     "pip>=24.3.1",
+    "pony>=0.7.19",
     "psutil>=6.1.1",
     "pyside6>=6.8.1.1",
     "pyyaml>=6.0.2",
