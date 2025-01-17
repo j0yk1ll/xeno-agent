@@ -222,9 +222,7 @@ class TaskAgent:
         logging.info(f"📍 Step {self.n_steps}")
 
         ledger_messages = self.message_ledger.copy()
-        code = None
 
-        # Generate
         try:
             logging.info("🏃 Generating action")
             messages = [
@@ -232,75 +230,94 @@ class TaskAgent:
                 TaskMessage(task),
                 *ledger_messages,
             ]
-            llm_output = self.llm.generate(messages, stop_sequences=["<end_code>"])
+            code_blob = self.llm.generate(messages, stop_sequences=["<end_code>"])
         except Exception as e:
             logging.error(f"❌ Failed to generate action. {str(e)}.")
             raise Exception(f"Error when generating model output:\n{str(e)}")
 
-        # Parse code with retry mechanism
-        code = self._parse_with_retries(llm_output)
+        # Prepare messages for parsing
+        messages_with_code_blob = [*messages, AssistantMessage(code_blob)]
 
-        if not code:
-            logging.error("❌ No code parsed. Exiting step.")
+        # Parse code with retry mechanism
+        try:
+            code = self._parse_with_retries(code_blob, messages_with_code_blob)
+        except:
             return None
+
+        # Prepare messages for execution
+        messages_with_parsed_code = [*messages, AssistantMessage(code)]
 
         # Execute code with retry mechanism
-        return self._execute_with_retries(code)
+        return self._execute_with_retries(code, messages_with_parsed_code)
 
-    def _parse_with_retries(self, llm_output: str, retries: int = 5) -> Optional[str]:
+
+    def _parse_with_retries(
+        self, code_blob: str, messages: List[Message], retries: int = 5
+    ) -> str:
         """
-        Parses the code with a retry mechanism.
-        Args:
-            llm_output (str): The output from the LLM to parse.
-        Returns:
-            Optional[str]: Parsed code if successful, None otherwise.
+        Parses the code with a retry mechanism, providing context messages
+        (including the system and user messages) to the LLM on each retry.
+        Raises an exception if it cannot parse after all retries.
         """
+        current_messages = messages.copy()
+
         try:
             logging.info("🔧 Parsing code")
-            code = self._parse_code_blob(llm_output)
-            return code
+            return self._parse_code_blob(code_blob)
         except Exception as e:
-            error_message = f"An error occurred while parsing code blob. {str(e)}."
+            error = str(e)
+            logging.warning(f"❌ Failed to parse code. {error}")
             parse_retries = retries
-            while retries > 0:
-                logging.warning(
-                    f"❌ Failed to parse code. Retrying ({retries + 1 - parse_retries}/{retries}). {error_message}"
-                )
+
+            while parse_retries > 0:
+                parse_retries -= 1
+                # Inform the model about the parsing error
+                error_message = f"An error occurred while parsing code blob. {error}."
+                current_messages.append(UserMessage(error_message))
                 try:
-                    message = UserMessage(error_message)
-                    llm_output = self.llm.generate(
-                        [message], stop_sequences=["<end_code>"]
+                    # Ask LLM to correct the code
+                    corrected_code = self.llm.generate(
+                        current_messages, stop_sequences=["<end_code>"]
                     )
+                    # Add the corrected code as an Assistant message
+                    current_messages.append(AssistantMessage(corrected_code))
 
                     logging.info("🔧 Parsing corrected code")
-                    code = self._parse_code_blob(llm_output)
-                    logging.info(f"🩹 Fixed code: {code}.")
+                    code = self._parse_code_blob(corrected_code)
+                    logging.info(f"🩹 Fixed code: {code}")
                     return code
                 except Exception as e2:
-                    error_message = (
-                        f"An error occurred while parsing code blob. {str(e2)}."
-                    )
-                    parse_retries -= 1
+                    error = str(e2)
                     logging.warning(
-                        f"Parsing retry {retries + 1 - parse_retries}/{retries} failed: {error_message}"
+                        f"❌ Parsing retry failed: {error}. "
+                        f"Attempts left: {parse_retries}"
                     )
 
-            # After retries exhausted
+            # After all retries exhausted, raise an exception
             self.message_ledger.add(ErrorMessage(error_message))
-            logging.error(f"❌ Failed to parse code after retries: {error_message}")
-            return None
+            logging.error(f"❌ Failed to parse code after {retries} retries: {error}")
+            raise Exception(error)
 
-    def _execute_with_retries(self, code: str, retries: int = 5) -> Optional[str]:
+
+    def _execute_with_retries(
+        self, code: str, messages: List[Message], retries: int = 5
+    ) -> Optional[str]:
         """
         Executes the code with a retry mechanism in case of execution errors.
-        Args:
-            code (str): The code to execute.
-        Returns:
-            Optional[str]: The final answer if execution is successful, None otherwise.
+        Sends the entire context (system, user, assistant messages) plus
+        the error to the model on each retry so it can attempt to correct.
         """
+
+        logging.info("🧑‍💻 Executing code")
+
+        # We keep track of two different sets of messages
+        # current_messages contains all correction attemps and the error messages to inform the model about already tried corrections
+        # inner_current_messages contains only the messages for the most recent correction attempt so the parser can focus only on the current corrected code blob
+        current_messages = messages.copy()
+        inner_current_messages = messages.copy()
         execute_retries = retries
+
         while execute_retries > 0:
-            logging.info("🧑‍💻 Executing code")
             execution_result, execution_logs, execution_error = self.python_interpreter(
                 code
             )
@@ -319,38 +336,43 @@ class TaskAgent:
                     return None
 
                 # Prompt LLM to correct the code based on the execution error
-                error_message = (
-                    f"An error occurred during code execution: {execution_error}"
-                )
+                error_message = f"An error occurred during code execution: {execution_error}"
                 logging.info("🔧 Attempting to correct code based on execution error.")
-                try:
-                    message = UserMessage(error_message)
-                    llm_output = self.llm.generate(
-                        [message], stop_sequences=["<end_code>"]
-                    )
 
-                    # Parse the corrected code with parsing error handling
-                    code = self._parse_with_retries(llm_output)
-                    if not code:
-                        logging.error(
-                            "❌ Failed to parse corrected code after execution error."
+                current_messages.append(UserMessage(error_message))
+                inner_current_messages.append(UserMessage(error_message))
+
+                try:
+                    corrected_code_blob = self.llm.generate(
+                        current_messages, stop_sequences=["<end_code>"]
+                    )
+                    
+                    current_messages.append(AssistantMessage(corrected_code_blob))
+                    inner_current_messages.append(AssistantMessage(corrected_code_blob))
+
+                    try:
+                        # Parse the corrected code
+                        code = self._parse_with_retries(
+                            corrected_code_blob, inner_current_messages
                         )
-                        return None
+                    except Exception as parse_e:
+                        # Revert to the original messages so next iteration doesn't accumulate broken attempts
+                        inner_current_messages = messages.copy()
+                        continue
+
                 except Exception as llm_e:
                     logging.error(f"❌ LLM failed to generate corrected code: {llm_e}")
                     return None
+
             else:
-                # Successful execution but no final result
+                # If successful execution but no final result
                 if not execution_result:
-
                     message = "\n".join(execution_logs)
-
                     self.message_ledger.add(StepResultMessage(message))
-                    logging.info(f"✔️ Successfully executed code: {execution_result}")
-
+                    logging.info("✔️ Successfully executed code with no final result.")
                     return None
 
-                # Return final result
+                # Otherwise, return the final result
                 return execution_result
 
         return None
@@ -527,20 +549,20 @@ class TaskAgent:
             return False
 
     def update_completion_model(
-            self,
-            completion_model_id: str,
-            completion_api_base: Optional[str],
-            completion_api_key: Optional[str],
-            **kwargs,
-        ):
-            """
-            Update the completion model parameters and reinitialize the LLM.
-            """
-            self.completion_model_id = completion_model_id
-            self.completion_api_base = completion_api_base
-            self.completion_api_key = completion_api_key
-            logging.debug("Completion model parameters updated.")
-            self._initialize_llm()
+        self,
+        completion_model_id: str,
+        completion_api_base: Optional[str],
+        completion_api_key: Optional[str],
+        **kwargs,
+    ):
+        """
+        Update the completion model parameters and reinitialize the LLM.
+        """
+        self.completion_model_id = completion_model_id
+        self.completion_api_base = completion_api_base
+        self.completion_api_key = completion_api_key
+        logging.debug("Completion model parameters updated.")
+        self._initialize_llm()
 
     def update_embedding_model(
         self,
