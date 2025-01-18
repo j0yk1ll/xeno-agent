@@ -250,7 +250,6 @@ class TaskAgent:
         # Execute code with retry mechanism
         return self._execute_with_retries(code, messages_with_parsed_code)
 
-
     def _parse_with_retries(
         self, code_blob: str, messages: List[Message], retries: int = 5
     ) -> str:
@@ -298,7 +297,6 @@ class TaskAgent:
             logging.error(f"❌ Failed to parse code after {retries} retries: {error}")
             raise Exception(error)
 
-
     def _execute_with_retries(
         self, code: str, messages: List[Message], retries: int = 5
     ) -> Optional[str]:
@@ -336,7 +334,9 @@ class TaskAgent:
                     return None
 
                 # Prompt LLM to correct the code based on the execution error
-                error_message = f"An error occurred during code execution: {execution_error}"
+                error_message = (
+                    f"An error occurred during code execution: {execution_error}"
+                )
                 logging.info("🔧 Attempting to correct code based on execution error.")
 
                 current_messages.append(UserMessage(error_message))
@@ -346,7 +346,7 @@ class TaskAgent:
                     corrected_code_blob = self.llm.generate(
                         current_messages, stop_sequences=["<end_code>"]
                     )
-                    
+
                     current_messages.append(AssistantMessage(corrected_code_blob))
                     inner_current_messages.append(AssistantMessage(corrected_code_blob))
 

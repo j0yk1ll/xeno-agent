@@ -10,8 +10,6 @@ def stt_thread(
     is_recording_event: threading.Event,
     shutdown_event: threading.Event,
     outbound_queue: queue.Queue,
-    transcription_model: str = "base",
-    vad_model_repo: str = "snakers4/silero-vad",
     vad_threshold: float = 0.75,
     sample_rate: int = 16000,
     silence_duration: float = 2.0,
@@ -52,8 +50,6 @@ def stt_thread(
     # Initialize STT
     try:
         stt = STT(
-            transcription_model=transcription_model,
-            vad_model_repo=vad_model_repo,
             vad_threshold=vad_threshold,
             sample_rate=sample_rate,
             silence_duration=silence_duration,

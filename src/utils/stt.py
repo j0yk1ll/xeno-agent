@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 import time
 import re
 from typing import Optional, Callable
@@ -14,6 +15,12 @@ DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_SILENCE_DURATION = 2.0
 DEFAULT_VAD_THRESHOLD = 0.75
 
+# Define the xeno directory
+xeno_models_dir = Path.home() / ".xeno" / "models"
+xeno_silero_vad_models_dir = xeno_models_dir / "silero_vad"
+xeno_faster_whisper_models_dir = xeno_models_dir / "faster_whisper"
+
+
 class STT:
     """
     Manages speech-to-text (STT) using Whisper and Silero VAD models.
@@ -22,8 +29,6 @@ class STT:
 
     def __init__(
         self,
-        transcription_model: str = "base",
-        vad_model_repo: str = "snakers4/silero-vad",
         vad_threshold: float = DEFAULT_VAD_THRESHOLD,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         silence_duration: float = DEFAULT_SILENCE_DURATION,
@@ -43,8 +48,6 @@ class STT:
         """
 
         logging.debug("Initializing STT with parameters:")
-        logging.debug(f"  transcription_model: {transcription_model}")
-        logging.debug(f"  vad_model_repo: {vad_model_repo}")
         logging.debug(f"  vad_threshold: {vad_threshold}")
         logging.debug(f"  sample_rate: {sample_rate}")
         logging.debug(f"  silence_duration: {silence_duration}")
@@ -59,28 +62,30 @@ class STT:
 
         # Silero VAD
         try:
-            self.vad_model, _ = torch.hub.load(
-                repo_or_dir=vad_model_repo, model="silero_vad", force_reload=False
-            )
-            self.vad_model.reset_states()
-            logging.debug("Silero VAD model loaded successfully.")
+            # Define the path to the TorchScript model
+            model_path = xeno_silero_vad_models_dir / "silero_vad.jit"
+
+            # Load the TorchScript model
+            self.vad_model = torch.jit.load(model_path)
+
+            # If your model has a reset_states method or similar, call it
+            if hasattr(self.vad_model, "reset_states"):
+                self.vad_model.reset_states()
+
+            logging.debug("Silero VAD TorchScript model loaded successfully.")
         except Exception as e:
-            logging.error(f"Failed to load Silero VAD model: {e}")
+            logging.error(f"Failed to load Silero VAD TorchScript model: {e}")
             raise
 
         # Whisper (for final transcription)
         try:
             self.transcription_model = WhisperModel(
-                model_size_or_path=transcription_model,
+                model_size_or_path=str(xeno_faster_whisper_models_dir),
                 device="cpu",
             )
-            logging.debug(
-                f"Whisper transcription model '{transcription_model}' loaded successfully."
-            )
+            logging.debug(f"Whisper transcription model' loaded successfully.")
         except Exception as e:
-            logging.error(
-                f"Failed to load Whisper transcription model '{transcription_model}': {e}"
-            )
+            logging.error(f"Failed to load Whisper transcription model: {e}")
             raise
 
         # Audio state
@@ -104,7 +109,9 @@ class STT:
         try:
             # Accumulate partial data
             self.vad_buffer += data
-            CHUNK_SIZE_BYTES = DEFAULT_CHUNK_SIZE * 2  # 512 samples * 2 bytes per sample
+            CHUNK_SIZE_BYTES = (
+                DEFAULT_CHUNK_SIZE * 2
+            )  # 512 samples * 2 bytes per sample
 
             # Process all complete chunks in the buffer
             while len(self.vad_buffer) >= CHUNK_SIZE_BYTES:

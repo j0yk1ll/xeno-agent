@@ -8,6 +8,7 @@ dependencies = [
     "browser-use>=0.1.19",
     "emoji>=2.14.0",
     "faster-whisper>=1.1.1",
+    "ftfy>=6.3.1",
     "langchain-community>=0.3.14",
     "langchain>=0.3.14",
     "litellm>=1.57.8",
@@ -25,8 +26,10 @@ dependencies = [
     "sounddevice>=0.5.1",
     "soundfile>=0.13.0",
     "spacy>=3.8.3",
+    "sqlite-vec>=0.1.6",
     "torch>=2.5.1",
     "torchaudio>=2.5.1",
+    "torchvision>=0.20.1",
     "transformers>=4.48.0",
 ]
 

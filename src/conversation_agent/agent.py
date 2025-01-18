@@ -15,6 +15,7 @@ from src.utils.local_python_interpreter import LocalPythonInterpreter
 from src.utils.tool import Tool
 from src.utils.messages import AssistantMessage, Message, SystemMessage, UserMessage
 from src.utils.threads.task_agent_tread_manager import TaskAgentThreadManager
+from src.utils.episodic_memory import EpisodicMemory
 
 
 class ConversationAgent:
@@ -26,6 +27,7 @@ class ConversationAgent:
     def __init__(
         self,
         task_agent_thread_manager: TaskAgentThreadManager,
+        memory: EpisodicMemory,
         completion_model_id: str,
         completion_api_base: Optional[str],
         completion_api_key: Optional[str],
@@ -36,6 +38,8 @@ class ConversationAgent:
     ):
         logging.debug("Initializing Conversation Agent.")
         self.agent_name = self.__class__.__name__
+
+        self.memory = memory
 
         # Store llm parameters
         self.completion_model_id = completion_model_id
@@ -86,6 +90,11 @@ class ConversationAgent:
         logging.debug("LLM instance initialized.")
 
     def add_observation(self, observation: str):
+        try:
+            self.memory.insert_text(observation)
+        except Exception as e:
+            raise Exception(f"An error occured while saving observation to episodic memory: {str(e)}")
+        
         self._add_observation(observation)
 
     def _add_observation(self, observation: str):

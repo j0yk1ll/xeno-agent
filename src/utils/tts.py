@@ -2,6 +2,7 @@ import os
 import re
 import logging
 from typing import Iterator
+from pathlib import Path
 
 import num2words
 import numpy as np
@@ -10,10 +11,15 @@ import torch
 import spacy
 
 from src.utils.audio_player import AudioPlayer
-from src.utils.settings_manager import SettingsManager
 
 from .kokoro.core import generate
 from .kokoro.models import build_model
+
+
+# Define the xeno directory
+xeno_models_dir = Path.home() / ".xeno" / "models"
+xeno_spacy_models_dir = xeno_models_dir / "spacy"
+xeno_kokoro_models_dir = xeno_models_dir / "kokoro"
 
 
 def get_available_voices() -> list:
@@ -23,7 +29,16 @@ def get_available_voices() -> list:
     Returns:
         List[str]: A list of available voice names.
 
-    Raises:
+    Raises:current_file_path = os.path.abspath(__file__)
+        current_directory = os.path.dirname(current_file_path)
+        voicepack_path = os.path.join(
+            current_directory, "kokoro", "voices", f"{self.voice}.pt"
+        )
+
+        if not os.path.exists(voicepack_path):
+            raise FileNotFoundError(
+                f"Voicepack '{self.voice}' does not exist in 'kokoro/voices' directory."
+            )
         FileNotFoundError: If the voices directory does not exist.
     """
     current_file_path = os.path.abspath(__file__)
@@ -63,28 +78,33 @@ class TTS:
 
     def _initialize_spacy(self):
         """
-        Load or download the 'en_core_web_sm' spaCy model for sentence parsing.
+        Load the 'en_core_web_sm' spaCy model for sentence parsing.
+
+        Raises:
+            OSError: If the spaCy model cannot be loaded.
         """
         try:
-            self.spacy_nlp = spacy.load("en_core_web_sm")
+            self.spacy_nlp = spacy.load(xeno_spacy_models_dir)
         except OSError:
-            spacy.cli.download("en_core_web_sm")
-            self.spacy_nlp = spacy.load("en_core_web_sm")
+            raise OSError(
+                "SpaCy model 'en_core_web_sm' is not available. Please ensure it is downloaded."
+            )
 
     def _initialize_model(self):
         """
         Loads the Kokoro model.
+
+        Raises:
+            FileNotFoundError: If the Kokoro model file does not exist.
         """
         # Detect device
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logging.info(f"Using device: {device}")
 
         # Load the model
-        current_file_path = os.path.abspath(__file__)
-        current_directory = os.path.dirname(current_file_path)
-        model_path = os.path.join(current_directory, "kokoro", "v0_19.pth")
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model path '{model_path}' does not exist.")
+        model_path = xeno_kokoro_models_dir / "kokoro-v0_19.pth"
+        if not model_path.exists():
+            raise FileNotFoundError(f"Kokoro model path '{model_path}' does not exist.")
         self.model = build_model(model_path, device)
         logging.info("Kokoro model loaded successfully.")
 
@@ -335,6 +355,7 @@ class TTS:
     def update_desired_sample_rate(self, desired_sample_rate: int):
         self.desired_sample_rate = desired_sample_rate
 
+
 if __name__ == "__main__":
     # Example usage (blocking). In production, you likely want to
     # feed the generated chunks to an audio output or queue, etc.
@@ -351,7 +372,7 @@ if __name__ == "__main__":
 
     try:
         # Generate PCM data and play each chunk
-        for chunk in tts.generate_audio(sample_text, voice="af_sky"):
+        for chunk in tts.generate_audio(sample_text):
             audio_player.play_audio_chunk(chunk)
 
         print("Done generating and playing audio.")

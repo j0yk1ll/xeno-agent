@@ -5,6 +5,8 @@ import threading
 from src.conversation_agent.agent import ConversationAgent
 from src.utils.settings_manager import SettingsManager
 from src.utils.threads.task_agent_tread_manager import TaskAgentThreadManager
+from src.utils.embedding_helper import EmbeddingHelper
+from src.utils.episodic_memory import EpisodicMemory
 
 
 def conversation_agent_thread(
@@ -33,9 +35,15 @@ def conversation_agent_thread(
     # Initialize the TaskAgentThreadManager
     task_agent_thread_manager = TaskAgentThreadManager(settings)
 
+    # Create embedding helper
+    embedding_helper = EmbeddingHelper()
+
+    # Initialize DB with that embedding model
+    memory = EpisodicMemory(embedding_helper=embedding_helper, vector_dim=1024)
+
     # Initialize the ConversationAgent
     conversation_agent = ConversationAgent(
-        task_agent_thread_manager=task_agent_thread_manager, **settings
+        task_agent_thread_manager=task_agent_thread_manager, memory=memory, **settings
     )
 
     def put_response(response: str):
@@ -52,6 +60,8 @@ def conversation_agent_thread(
                 if message is None:
                     # Sentinel received, exit the loop
                     break
+
+                logging.debug(f"ConversionAgentThread Received message: {message}")
 
                 # Add observation
                 conversation_agent.add_observation(message)

@@ -208,3 +208,8 @@ uv run app.py
    ```powershell
    python app.py
    ```
+
+### httpx.InvalidURL: Invalid port: 'generateContent'
+
+In version `1.58.2` and maybe others, litellm introduced a bug causing the error.
+Run `uv add litellm==1.57.8` to pin litellm to version `1.57.8`, which should resolve the issue.

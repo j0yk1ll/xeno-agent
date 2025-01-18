@@ -29,7 +29,6 @@ from PySide6 import QtSvg, QtGui, QtCore
 from src.utils.threads.conversation_agent_thread import conversation_agent_thread
 from src.utils.threads.tts_thread import tts_thread
 from src.utils.threads.stt_thread import stt_thread
-from src.utils.prepare_models import prepare_models
 from src.utils.tts import get_available_voices
 from src.utils.settings_manager import SettingsManager
 
@@ -1086,9 +1085,6 @@ class MainWindow(QMainWindow):
 # Main entry point
 ###############################################################################
 def main():
-    # Prepare models
-    prepare_models()
-
     # Initialize SettingsManager
     settings_manager = SettingsManager()
 
@@ -1140,8 +1136,6 @@ def main():
             stt_outbound_queue,
         ),
         kwargs={
-            "transcription_model": "base",
-            "vad_model_repo": "snakers4/silero-vad",
             "vad_threshold": 0.75,
             "sample_rate": 16000,
             "silence_duration": 2.0,
