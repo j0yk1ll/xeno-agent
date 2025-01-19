@@ -64,7 +64,7 @@ def conversation_agent_thread(
                 logging.debug(f"ConversionAgentThread Received message: {message}")
 
                 # Add observation
-                conversation_agent.add_observation(message)
+                conversation_agent.add_text_observation(message)
             except queue.Empty:
                 # No message received, continue the loop
                 continue

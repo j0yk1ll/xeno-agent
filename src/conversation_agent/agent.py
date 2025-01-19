@@ -89,15 +89,15 @@ class ConversationAgent:
         )
         logging.debug("LLM instance initialized.")
 
-    def add_observation(self, observation: str):
+    def add_text_observation(self, observation: str):
         try:
             self.memory.insert_text(observation)
         except Exception as e:
             raise Exception(f"An error occured while saving observation to episodic memory: {str(e)}")
         
-        self._add_observation(observation)
+        self._add_text_observation(observation)
 
-    def _add_observation(self, observation: str):
+    def _add_text_observation(self, observation: str):
         self.observations.append(observation)
         self._on_observation(
             self.observations[-21:]
@@ -167,7 +167,7 @@ class ConversationAgent:
             self._execute_with_retries(code, messages_with_parsed_code)
         except Exception as e:
             # If code couldn't be corrected or executed within the given retries let the agent know and exit
-            self.add_observation(str(e))
+            self.add_text_observation(str(e))
             return
 
     def _parse_with_retries(
@@ -301,7 +301,7 @@ class ConversationAgent:
 
     def _on_solve_task_result(self, result: str):
         logging.debug(f"_on_solve_task_result with {result}")
-        self._add_observation(result)
+        self._add_text_observation(result)
 
     def update_completion_model(
         self,
