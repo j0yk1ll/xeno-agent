@@ -20,8 +20,6 @@ import logging
 from typing import Callable, Dict, Union, get_type_hints, get_origin, get_args
 from transformers.utils.chat_template_utils import _parse_type_hint
 
-from src.task_agent.output_types import handle_agent_input_types, handle_agent_output_types
-
 AUTHORIZED_TYPES = [
     "string",
     "boolean",
@@ -140,7 +138,6 @@ class Tool:
                 f"output_type '{self.output_type}' is not authorized. Must be one of {AUTHORIZED_TYPES}."
             )
 
-       
         if not hasattr(self, "forward"):
             raise AttributeError("Subclass must implement the 'forward' method.")
 
@@ -172,18 +169,14 @@ class Tool:
             "Implement the 'forward' method in your subclass of `Tool`."
         )
 
-    def __call__(self, *args, sanitize_inputs_outputs: bool = False, **kwargs):
+    def __call__(self, *args, **kwargs):
         if not self.is_initialized:
             self.setup()
-        if sanitize_inputs_outputs:
-            args, kwargs = handle_agent_input_types(*args, **kwargs)
         logging.debug(
             f"Calling tool '{self.name}' with args: {args} and kwargs: {kwargs}"
         )
         outputs = self.forward(*args, **kwargs)
         logging.debug(f"Outputs from tool '{self.name}': {outputs}")
-        if sanitize_inputs_outputs:
-            outputs = handle_agent_output_types(outputs, self.output_type)
         return outputs
 
     def setup(self) -> None:

@@ -29,7 +29,6 @@ from src.task_agent.messages import (
     StepResultMessage,
     TaskMessage,
 )
-from src.task_agent.output_types import handle_agent_output_types
 from src.utils.llm import LLM
 from src.utils.messages import (
     AssistantMessage,
@@ -216,7 +215,7 @@ class TaskAgent:
 
         logging.info(f"🏆 Result: {final_answer}")
 
-        return handle_agent_output_types(final_answer)
+        return final_answer
 
     def _step(self, task: str):
         logging.info(f"📍 Step {self.n_steps}")
@@ -236,7 +235,7 @@ class TaskAgent:
             raise Exception(f"Error when generating model output:\n{str(e)}")
 
         # Prepare messages for parsing
-        messages_with_code_blob = [*messages, AssistantMessage(code_blob)]
+        messages_with_code_blob = [*messages, AssistantMessage(f"Generated Answer With Code: {code_blob}")]
 
         # Parse code with retry mechanism
         try:

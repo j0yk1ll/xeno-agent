@@ -149,6 +149,7 @@ class Browser:
             task=task,
             llm=llm,
             browser_context=context,  # Use the specific browser session
+            generate_gif=False
         )
 
         try:

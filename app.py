@@ -1,10 +1,14 @@
+from io import BytesIO
 import logging
+import mimetypes
+import os
 import sys
 import queue
 import threading
 
 from pathlib import Path
 
+import PIL
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -23,19 +27,21 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QFrame,
     QCheckBox,
+    QFileDialog,
 )
 from PySide6 import QtSvg, QtGui, QtCore
 
-from src.utils.threads.conversation_agent_thread import conversation_agent_thread
-from src.utils.threads.tts_thread import tts_thread
-from src.utils.threads.stt_thread import stt_thread
+from src.utils.threads.proxy_agent_thread import ProxyAgentThread
+from src.utils.threads.tts_thread import TTSThread
+from src.utils.threads.stt_thread import STTThread
 from src.utils.tts import get_available_voices
 from src.utils.settings_manager import SettingsManager
+from src.utils.types import FileType
 
 ###############################################################################
 # Configure logging
 ###############################################################################
-LOGGING_LEVEL = logging.DEBUG
+LOGGING_LEVEL = logging.INFO
 
 # We'll place logs in ~/.xeno/app.log or C:\Users\<username>\.xeno/app.log
 xeno_dir = Path.home() / ".xeno"
@@ -69,6 +75,7 @@ if file_handler:
 logger.addHandler(stream_handler)
 if file_handler:
     logger.addHandler(file_handler)
+
 
 ###############################################################################
 # Custom AnimatedGradientLabel
@@ -132,6 +139,47 @@ class AnimatedGradientLabel(QLabel):
 
         painter.end()
 
+
+###############################################################################
+# Custom DraggableTextEdit
+###############################################################################
+class DraggableTextEdit(QTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if self.is_supported_file(url.toLocalFile()):
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if self.is_supported_file(url.toLocalFile()):
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                file_path = url.toLocalFile()
+                if self.is_supported_file(file_path):
+                    self.window().handle_attached_file(file_path)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def is_supported_file(self, file_path):
+        supported_extensions = [".png", ".jpg", ".jpeg", ".wav"]
+        _, ext = os.path.splitext(file_path)
+        return ext.lower() in supported_extensions
+
+
 ###############################################################################
 # Helper function to color an SVG
 ###############################################################################
@@ -160,13 +208,20 @@ def QColoredSVGIcon(svg_path, color):
 
     return QtGui.QIcon(QtGui.QPixmap.fromImage(image))
 
+
 ###############################################################################
 # Main Window
 ###############################################################################
 class MainWindow(QMainWindow):
-
-    def __init__(self, settings_manager: SettingsManager, agent_inbound: queue.Queue, agent_outbound: queue.Queue, tts_inbound: queue.Queue, stt_outbound: queue.Queue,
-                 stt_is_recording_event: threading.Event):
+    def __init__(
+        self,
+        settings_manager: SettingsManager,
+        agent_inbound: queue.Queue,
+        agent_outbound: queue.Queue,
+        tts_inbound: queue.Queue,
+        stt_outbound: queue.Queue,
+        stt_is_recording_event: threading.Event,
+    ):
         super().__init__()
         self.setWindowTitle("Xeno Agent")
         self.setGeometry(100, 100, 400, 600)
@@ -177,7 +232,7 @@ class MainWindow(QMainWindow):
         self.tts_inbound = tts_inbound  # UI -> tts
         self.stt_outbound = stt_outbound  # stt -> UI
 
-        # *** Added *** Initialize voice recording state
+        # Initialize voice recording state
         self.is_voice_recording = False  # Tracks if voice recording is active
 
         # Register STT control event
@@ -187,23 +242,45 @@ class MainWindow(QMainWindow):
         self.settings_manager = settings_manager
 
         # Read settings from the manager
-        self.completion_model_id = self.settings_manager.get_settings_key("completion_model_id", "ollama/qwen2.5-coder")
-        self.completion_api_base = self.settings_manager.get_settings_key("completion_api_base", "http://localhost:11434")
-        self.completion_api_key = self.settings_manager.get_settings_key("completion_api_key", "")
+        self.completion_model_id = self.settings_manager.get_settings_key(
+            "completion_model_id", "ollama/qwen2.5-coder"
+        )
+        self.completion_api_base = self.settings_manager.get_settings_key(
+            "completion_api_base", "http://localhost:11434"
+        )
+        self.completion_api_key = self.settings_manager.get_settings_key(
+            "completion_api_key", ""
+        )
 
-        self.embedding_model_id = self.settings_manager.get_settings_key("embedding_model_id", "ollama/granite-embedding")
-        self.embedding_api_base = self.settings_manager.get_settings_key("embedding_api_base", "http://localhost:11434")
-        self.embedding_api_key = self.settings_manager.get_settings_key("embedding_api_key", "")
+        self.embedding_model_id = self.settings_manager.get_settings_key(
+            "embedding_model_id", "ollama/granite-embedding"
+        )
+        self.embedding_api_base = self.settings_manager.get_settings_key(
+            "embedding_api_base", "http://localhost:11434"
+        )
+        self.embedding_api_key = self.settings_manager.get_settings_key(
+            "embedding_api_key", ""
+        )
 
-        # *** Added *** Browser Use Model
-        self.browser_use_model_id = self.settings_manager.get_settings_key("browser_use_model_id", "ollama/qwen2.5-coder")
-        self.browser_use_api_base = self.settings_manager.get_settings_key("browser_use_api_base", "http://localhost:11434")
-        self.browser_use_api_key = self.settings_manager.get_settings_key("browser_use_api_key", "")
+        # Browser Use Model
+        self.browser_use_model_id = self.settings_manager.get_settings_key(
+            "browser_use_model_id", "ollama/qwen2.5-coder"
+        )
+        self.browser_use_api_base = self.settings_manager.get_settings_key(
+            "browser_use_api_base", "http://localhost:11434"
+        )
+        self.browser_use_api_key = self.settings_manager.get_settings_key(
+            "browser_use_api_key", ""
+        )
 
         self.tts_voice = self.settings_manager.get_settings_key("voice", "af_sky")
-        self.tts_desired_sample_rate = int(self.settings_manager.get_settings_key("desired_sample_rate", 24000))
+        self.tts_desired_sample_rate = int(
+            self.settings_manager.get_settings_key("desired_sample_rate", 24000)
+        )
 
-        self.searxng_enabled = self.settings_manager.get_settings_key("searxng_enabled", False)
+        self.searxng_enabled = self.settings_manager.get_settings_key(
+            "searxng_enabled", False
+        )
 
         self.stacked_widget = QStackedWidget()
         self.setCentralWidget(self.stacked_widget)
@@ -341,7 +418,9 @@ class MainWindow(QMainWindow):
         )
         self.speech_button.setFixedSize(50, 50)
         self.speech_button.setIconSize(self.speech_button.size() * 0.5)
-        self.speech_button.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        self.speech_button.setCursor(
+            QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        )
         self.speech_button.setStyleSheet(
             """
                 QPushButton {
@@ -354,7 +433,7 @@ class MainWindow(QMainWindow):
                 }
             """
         )
-        # *** Modified *** Connect speech_button to toggle_voice_recording
+        # Modified Connect speech_button to toggle_voice_recording
         self.speech_button.clicked.connect(self.toggle_voice_recording)
 
         bottom_layout = QHBoxLayout()
@@ -369,7 +448,9 @@ class MainWindow(QMainWindow):
         # -------------------------
         layout.addLayout(top_layout)
         layout.addStretch()
-        layout.addWidget(scroll_container, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(
+            scroll_container, alignment=QtCore.Qt.AlignmentFlag.AlignCenter
+        )
         layout.addStretch()
         layout.addLayout(bottom_layout)
 
@@ -544,12 +625,11 @@ class MainWindow(QMainWindow):
         # Store widgets for later access
         self.settings_widgets[title] = {
             "voice_dropdown": voice_dropdown,
-            "desired_sample_rate_input": desired_sample_rate_input,  # Added this line
+            "desired_sample_rate_input": desired_sample_rate_input,
         }
 
         return container
 
-    
     def create_searxng_settings_group(self, title: str):
         container = QWidget()
         container_layout = QVBoxLayout()
@@ -588,12 +668,11 @@ class MainWindow(QMainWindow):
         container.setLayout(container_layout)
 
         # Store widgets for later access
-        self.settings_widgets[title] = {
+        self.settings_widgets["Searxng"] = {
             "searxng_enabled": searxng_enabled_input,
         }
 
         return container
-
 
     def create_settings_screen(self):
         settings_screen = QWidget()
@@ -636,7 +715,9 @@ class MainWindow(QMainWindow):
         # -------------------------
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet("QScrollArea { border: none; }")  # Optional: Remove border
+        scroll_area.setStyleSheet(
+            "QScrollArea { border: none; }"
+        )  # Optional: Remove border
 
         # Container widget for scroll area
         scroll_widget = QWidget()
@@ -695,27 +776,51 @@ class MainWindow(QMainWindow):
         # -------------------------
         # Set initial values for Completion Model
         completion_model_group_widgets = self.settings_widgets["Completion Model"]
-        completion_provider, completion_name = self.completion_model_id.split("/", 1)
-        completion_model_group_widgets["model_provider"].setCurrentText(completion_provider)
+        if "/" in self.completion_model_id:
+            completion_provider, completion_name = self.completion_model_id.split(
+                "/", 1
+            )
+        else:
+            # Fallback in case the setting wasn't stored in provider/model format
+            completion_provider, completion_name = "ollama", "qwen2.5-coder"
+        completion_model_group_widgets["model_provider"].setCurrentText(
+            completion_provider
+        )
         completion_model_group_widgets["model_name"].setText(completion_name)
-        completion_model_group_widgets["api_base"].setText(self.completion_api_base or "")
+        completion_model_group_widgets["api_base"].setText(
+            self.completion_api_base or ""
+        )
         completion_model_group_widgets["api_key"].setText(self.completion_api_key or "")
 
         # Set initial values for Embedding Model
         embedding_model_group_widgets = self.settings_widgets["Embedding Model"]
-        embedding_provider, embedding_name = self.embedding_model_id.split("/", 1)
-        embedding_model_group_widgets["model_provider"].setCurrentText(embedding_provider)
+        if "/" in self.embedding_model_id:
+            embedding_provider, embedding_name = self.embedding_model_id.split("/", 1)
+        else:
+            embedding_provider, embedding_name = "ollama", "granite-embedding"
+        embedding_model_group_widgets["model_provider"].setCurrentText(
+            embedding_provider
+        )
         embedding_model_group_widgets["model_name"].setText(embedding_name)
         embedding_model_group_widgets["api_base"].setText(self.embedding_api_base or "")
         embedding_model_group_widgets["api_key"].setText(self.embedding_api_key or "")
 
         # Set initial values for Browser Use Model
         browser_use_model_group_widgets = self.settings_widgets["Browser Use Model"]
-        browser_provider, browser_name = self.browser_use_model_id.split("/", 1)
-        browser_use_model_group_widgets["model_provider"].setCurrentText(browser_provider)
+        if "/" in self.browser_use_model_id:
+            browser_provider, browser_name = self.browser_use_model_id.split("/", 1)
+        else:
+            browser_provider, browser_name = "ollama", "qwen2.5-coder"
+        browser_use_model_group_widgets["model_provider"].setCurrentText(
+            browser_provider
+        )
         browser_use_model_group_widgets["model_name"].setText(browser_name)
-        browser_use_model_group_widgets["api_base"].setText(self.browser_use_api_base or "")
-        browser_use_model_group_widgets["api_key"].setText(self.browser_use_api_key or "")
+        browser_use_model_group_widgets["api_base"].setText(
+            self.browser_use_api_base or ""
+        )
+        browser_use_model_group_widgets["api_key"].setText(
+            self.browser_use_api_key or ""
+        )
 
         # Set initial values for TTS Voice and Desired Sample Rate
         tts_group_widgets = self.settings_widgets["Text-to-Speech (TTS)"]
@@ -727,12 +832,11 @@ class MainWindow(QMainWindow):
         else:
             voice_dropdown.addItem(current_tts_voice)
             voice_dropdown.setCurrentText(current_tts_voice)
-        
-        # Initialize Desired Sample Rate
+
         desired_sample_rate_input = tts_group_widgets.get("desired_sample_rate_input")
         if desired_sample_rate_input:
             desired_sample_rate_input.setText(str(self.tts_desired_sample_rate))
-        
+
         # Set initial state for Searxng
         searxng_group_widgets = self.settings_widgets["Searxng"]
         searxng_enabled_input = searxng_group_widgets.get("searxng_enabled")
@@ -751,7 +855,7 @@ class MainWindow(QMainWindow):
             background-color: #333333;
             border-top-left-radius: 5px;
             border-top-right-radius: 5px;
-        """
+            """
         )
         chat_panel.setFixedHeight(self.panel_height)
         chat_panel.setLayout(None)
@@ -776,13 +880,13 @@ class MainWindow(QMainWindow):
                 background-color: #444444;
                 border-radius: 12px;
             }
-        """
+            """
         )
         self.close_button.clicked.connect(self.toggle_chat_panel)
         self.close_button.move(chat_panel.width() - self.close_button.width() - 16, 16)
 
         # Chat TextEdit
-        self.chat_text = QTextEdit(chat_panel)
+        self.chat_text = DraggableTextEdit(chat_panel)  # Use the custom QTextEdit
         self.chat_text.setPlaceholderText("Enter your message...")
         self.chat_text.setStyleSheet(
             """
@@ -793,14 +897,40 @@ class MainWindow(QMainWindow):
                 border-radius: 8px;
                 padding: 8px;
             }
-        """
+            """
         )
         self.chat_text.setGeometry(
             16,
             16 + self.close_button.height() + 8,
             chat_panel.width() - 32,
-            self.panel_height - 16 - self.close_button.height() - 8 - 16,
+            80,  # Height for the text area
         )
+
+        # Container for attachments and error messages
+        self.attachment_container_widget = QWidget(chat_panel)
+        self.attachment_container_widget.setGeometry(
+            16,
+            self.chat_text.y() + self.chat_text.height() + 8,
+            chat_panel.width() - 32,
+            48,  # Enough height for multiple badges or error
+        )
+        self.attachment_container_layout = QVBoxLayout()
+        self.attachment_container_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Sub-layout for file badges
+        self.file_badges_layout = QHBoxLayout()
+        self.file_badges_layout.setSpacing(5)
+        self.attachment_container_layout.addLayout(self.file_badges_layout)
+
+        # Error label for invalid file
+        self.attachment_error_label = QLabel("")
+        self.attachment_error_label.setStyleSheet("color: red; font-size: 12px;")
+        self.attachment_container_layout.addWidget(self.attachment_error_label)
+
+        self.attachment_container_widget.setLayout(self.attachment_container_layout)
+
+        # Keep track of attached files (paths) and their badge widgets
+        self.attached_files = []
 
         # Submit Button
         self.submit_button = QPushButton(chat_panel)
@@ -822,21 +952,68 @@ class MainWindow(QMainWindow):
             QPushButton:hover {
                 background-color: #2F2F2F;
             }
-        """
+            """
         )
-        self.submit_button.clicked.connect(self.submit_text)
+        self.submit_button.clicked.connect(self.submit_message)
         self.update_submit_button_position()
+
+        # Attach Button
+        self.attach_button = QPushButton(chat_panel)
+        self.attach_button.setIcon(
+            QColoredSVGIcon("assets/attach.svg", QtGui.QColor("lightgray"))
+        )
+        self.attach_button.setFixedSize(32, 32)
+        self.attach_button.setIconSize(self.attach_button.size() * 0.5)
+        self.attach_button.setCursor(
+            QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        )
+        self.attach_button.setStyleSheet(
+            """
+            QPushButton {
+                color: white;
+                border-radius: 8px;
+                background-color: #282828;
+            }
+            QPushButton:hover {
+                background-color: #2F2F2F;
+            }
+            """
+        )
+        self.attach_button.clicked.connect(self.open_file_dialog)
+        self.update_attach_button_position()
 
         return chat_panel
 
     def update_submit_button_position(self):
         if hasattr(self, "chat_text") and hasattr(self, "submit_button"):
+            # Position the submit button at the bottom right of the chat_text
             text_geo = self.chat_text.geometry()
-            submit_x = text_geo.x() + text_geo.width() - self.submit_button.width() - 10
+            submit_x = (
+                text_geo.x()
+                + text_geo.width()
+                - self.submit_button.width()
+                - 10  # Padding from right
+            )
             submit_y = (
-                text_geo.y() + text_geo.height() - self.submit_button.height() - 10
+                text_geo.y()
+                + text_geo.height()
+                - self.submit_button.height()
+                - 10  # Padding from bottom
             )
             self.submit_button.move(submit_x, submit_y)
+
+    def update_attach_button_position(self):
+        if hasattr(self, "chat_text") and hasattr(self, "submit_button"):
+            # Position the attach button at the bottom left of the chat_text
+            text_geo = self.chat_text.geometry()
+            attach_x = text_geo.x() + 10  # Padding from left
+            attach_y = (
+                text_geo.y()
+                + text_geo.height()
+                - self.attach_button.height()
+                - 10  # Padding from bottom
+            )
+            self.attach_button.move(attach_x, attach_y)
 
     ###########################################################################
     # Chat Logic
@@ -865,9 +1042,16 @@ class MainWindow(QMainWindow):
                 16,
                 16 + self.close_button.height() + 8,
                 self.chat_panel.width() - 32,
-                self.panel_height - 16 - self.close_button.height() - 8 - 16,
+                self.panel_height - 16 - self.close_button.height() - 8 - 52,
+            )
+            self.attachment_container_widget.setGeometry(
+                16,
+                self.chat_text.y() + self.chat_text.height() + 8,
+                self.chat_panel.width() - 32,
+                48,
             )
             self.update_submit_button_position()
+            self.update_attach_button_position()
 
             # Animate to show
             start_rect = QtCore.QRect(0, self.height(), self.width(), self.panel_height)
@@ -879,11 +1063,94 @@ class MainWindow(QMainWindow):
             self.animation.start()
             self.chat_visible = True
 
-    def submit_text(self):
+    def submit_message(self):
+        # Retrieve and strip the text from the chat input
         text = self.chat_text.toPlainText().strip()
-        if text:
-            self.agent_inbound.put(text)  # send to agent
+
+        # Proceed only if there's text or attached files
+        if text or self.attached_files:
+            files = []
+
+            for attached_file in list(self.attached_files):
+                file_path = attached_file['path']  # Assuming each attached_file is a dict with 'path'
+                # Determine the MIME type based on the file extension
+                mime_type, _ = mimetypes.guess_type(file_path)
+
+                if mime_type:
+                    if mime_type.startswith("image"):
+                        file_type = FileType.IMAGE
+                    elif mime_type.startswith("audio"):
+                        file_type = FileType.AUDIO
+                    else:
+                        continue
+                else:
+                    continue
+
+                # Initialize file_object
+                file_object = None
+
+                # Load the file based on its type
+                try:
+                    if file_type == FileType.IMAGE:
+                        # Open the image using PIL
+                        with PIL.Image.open(file_path) as image:
+                            # Check the image format
+                            if image.format.lower() in ['jpg', 'jpeg']:
+                                # Convert JPG/JPEG to PNG
+                                png_image_io = BytesIO()
+                                image.save(png_image_io, format='PNG')
+                                png_image_io.seek(0)  # Reset pointer to the beginning
+                                file_object = png_image_io
+                            else:
+                                # If already PNG, you can either keep the file path or read it as bytes
+                                with open(file_path, "rb") as f:
+                                    file_object = BytesIO(f.read())
+                    elif file_type == FileType.AUDIO:
+                        # Read the audio file as bytes
+                        with open(file_path, "rb") as f:
+                            audio_data = BytesIO(f.read())
+                        file_object = audio_data
+                    else:
+                        # For other file types, read as bytes
+                        with open(file_path, "rb") as f:
+                            binary_data = BytesIO(f.read())
+                        file_object = binary_data
+                except Exception as e:
+                    # Handle any errors during file loading
+                    print(f"Error loading file {file_path}: {e}")
+                    continue  # Skip this file and continue with others
+
+                # Append the file data and type to the files list
+                files.append(
+                    {
+                        "object": file_object,
+                        "type": file_type,
+                    }
+                )
+
+            # Prepare the message payload
+            message_payload = {
+                "text": text,
+                "files": files,  # Removed the extra brackets to make it a list of file dicts
+            }
+
+            # Send the payload to the agent
+            self.agent_inbound.put(message_payload)
+
+            # Clear the text input and attached files after submission
             self.chat_text.clear()
+            self.clear_attachments()
+
+    def clear_attachments(self):
+        """Removes all attachments and clears the badges from the UI."""
+        for file_info in self.attached_files:
+            # file_info is a dict like {"path": "path/to/file", "badge_widget": widget}
+            badge_widget = file_info["badge_widget"]
+            self.file_badges_layout.removeWidget(badge_widget)
+            badge_widget.deleteLater()
+
+        self.attached_files.clear()
+        self.attachment_error_label.clear()
 
     def listen_to_agent_responses(self):
         """
@@ -896,11 +1163,24 @@ class MainWindow(QMainWindow):
                 if response is None:
                     break  # Sentinel value to ignore
                 logging.debug(f"UI received {response}")
+
                 # Show in UI
-                self.response_label.setText(response)
+                # If `response` is just text, set that directly.
+                # If it is a dict, adapt as needed.
+                if isinstance(response, str):
+                    self.response_label.setText(response)
+                else:
+                    # Example of handling dict response:
+                    # self.response_label.setText(response.get("text", ""))
+                    self.response_label.setText(str(response))
+
                 self.response_label.adjustSize()
+
                 # Also send to TTS if desired
-                self.tts_inbound.put(response)
+                self.tts_inbound.put(
+                    response if isinstance(response, str) else str(response)
+                )
+
             except queue.Empty:
                 break  # queue is empty
 
@@ -916,9 +1196,113 @@ class MainWindow(QMainWindow):
                     break  # Sentinel value to ignore
                 logging.debug(f"Received transcription: {transcription}")
                 # Send transcription to agent
-                self.agent_inbound.put(transcription)
+                message_payload = {
+                    "text": transcription
+                }
+                self.agent_inbound.put(message_payload)
             except queue.Empty:
                 break  # queue is empty
+
+    ###########################################################################
+    # File Helpers
+    ###########################################################################
+    def open_file_dialog(self):
+        options = QFileDialog.Options()
+        options |= QFileDialog.ReadOnly
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Image or Audio File",
+            "",
+            "Images (*.png *.jpg *.jpeg);;Audio Files (*.wav)",
+            options=options,
+        )
+        if file_path:
+            self.handle_attached_file(file_path)
+
+    def handle_attached_file(self, file_path):
+        """Attempt to attach the file if it's supported, else show error."""
+        supported_extensions = [".png", ".jpg", ".jpeg", ".wav"]
+        _, ext = os.path.splitext(file_path)
+        ext = ext.lower()
+
+        if ext in supported_extensions:
+            self.attachment_error_label.clear()  # Clear any previous error
+            self.add_file_badge(file_path)
+        else:
+            self.attachment_error_label.setText("Error: Unsupported file type.")
+
+    def add_file_badge(self, file_path):
+        """Create a small 'badge' with file name + delete icon, and add it to the UI."""
+        badge_widget = QWidget()
+        badge_layout = QHBoxLayout(badge_widget)
+        badge_layout.setContentsMargins(6, 4, 6, 4)
+        badge_layout.setSpacing(6)
+
+        # Label for file name
+        file_label = QLabel(os.path.basename(file_path))
+        file_label.setStyleSheet(
+            """
+            QLabel {
+                color: white;
+            }
+            """
+        )
+
+        # Delete button
+        delete_button = QPushButton()
+        delete_button.setIcon(
+            QColoredSVGIcon("assets/close.svg", QtGui.QColor("lightgray"))
+        )
+        delete_button.setFixedSize(16, 16)
+        delete_button.setIconSize(delete_button.size() * 0.75)
+        delete_button.setStyleSheet(
+            """
+            QPushButton {
+                border: none;
+                background-color: transparent;
+            }
+            QPushButton:hover {
+                background-color: #444444;
+                border-radius: 8px;
+            }
+            """
+        )
+
+        delete_button.clicked.connect(lambda: self.remove_file_badge(file_path))
+
+        badge_layout.addWidget(file_label)
+        badge_layout.addWidget(delete_button)
+
+        # A little style for the badge background
+        badge_widget.setStyleSheet(
+            """
+            QWidget {
+                background-color: #555555;
+                border-radius: 8px;
+            }
+            """
+        )
+
+        # Insert the badge widget into the file badges layout
+        self.file_badges_layout.addWidget(badge_widget)
+
+        # Keep track of it
+        file_info = {
+            "path": file_path,
+            "badge_widget": badge_widget,
+        }
+        self.attached_files.append(file_info)
+
+    def remove_file_badge(self, file_path):
+        """Remove the badge associated with file_path from the layout and internal list."""
+        for file_info in self.attached_files:
+            if file_info["path"] == file_path:
+                badge_widget = file_info["badge_widget"]
+                self.file_badges_layout.removeWidget(badge_widget)
+                badge_widget.deleteLater()
+
+                self.attached_files.remove(file_info)
+                break
 
     ###########################################################################
     # Navigation / resize
@@ -943,9 +1327,16 @@ class MainWindow(QMainWindow):
                 16,
                 16 + self.close_button.height() + 8,
                 self.chat_panel.width() - 32,
-                self.panel_height - 16 - self.close_button.height() - 8 - 16,
+                self.panel_height - 16 - self.close_button.height() - 8 - 16 - 52,
+            )
+            self.attachment_container_widget.setGeometry(
+                16,
+                self.chat_text.y() + self.chat_text.height() + 8,
+                self.chat_panel.width() - 32,
+                48,
             )
             self.update_submit_button_position()
+            self.update_attach_button_position()
         else:
             self.chat_panel.setGeometry(
                 0, self.height(), self.width(), self.panel_height
@@ -989,7 +1380,7 @@ class MainWindow(QMainWindow):
             # Retrieve TTS settings
             tts_widget = self.settings_widgets.get("Text-to-Speech (TTS)", {})
             tts_voice = tts_widget.get("voice_dropdown", QComboBox()).currentText()
-            
+
             # Validate and retrieve Desired Sample Rate
             desired_sample_rate_input = tts_widget.get("desired_sample_rate_input")
             if desired_sample_rate_input:
@@ -998,7 +1389,9 @@ class MainWindow(QMainWindow):
                     raise ValueError("Desired Sample Rate must be an integer.")
                 tts_desired_sample_rate = int(desired_sample_rate_str)
             else:
-                tts_desired_sample_rate = self.tts_desired_sample_rate  # Fallback to current value
+                tts_desired_sample_rate = (
+                    self.tts_desired_sample_rate
+                )  # Fallback to current value
 
             # Retrieve Searxng settings
             searxng_widget = self.settings_widgets["Searxng"]
@@ -1010,20 +1403,40 @@ class MainWindow(QMainWindow):
             browser_use_model_id = f"{browser_provider}/{browser_name}"
 
             # Update settings in the manager
-            self.settings_manager.set_settings_key("completion_model_id", completion_model_id)
-            self.settings_manager.set_settings_key("completion_api_base", completion_api_base)
-            self.settings_manager.set_settings_key("completion_api_key", completion_api_key)
+            self.settings_manager.set_settings_key(
+                "completion_model_id", completion_model_id
+            )
+            self.settings_manager.set_settings_key(
+                "completion_api_base", completion_api_base
+            )
+            self.settings_manager.set_settings_key(
+                "completion_api_key", completion_api_key
+            )
 
-            self.settings_manager.set_settings_key("embedding_model_id", embedding_model_id)
-            self.settings_manager.set_settings_key("embedding_api_base", embedding_api_base)
-            self.settings_manager.set_settings_key("embedding_api_key", embedding_api_key)
+            self.settings_manager.set_settings_key(
+                "embedding_model_id", embedding_model_id
+            )
+            self.settings_manager.set_settings_key(
+                "embedding_api_base", embedding_api_base
+            )
+            self.settings_manager.set_settings_key(
+                "embedding_api_key", embedding_api_key
+            )
 
-            self.settings_manager.set_settings_key("browser_use_model_id", browser_use_model_id)
-            self.settings_manager.set_settings_key("browser_use_api_base", browser_api_base)
-            self.settings_manager.set_settings_key("browser_use_api_key", browser_api_key)
+            self.settings_manager.set_settings_key(
+                "browser_use_model_id", browser_use_model_id
+            )
+            self.settings_manager.set_settings_key(
+                "browser_use_api_base", browser_api_base
+            )
+            self.settings_manager.set_settings_key(
+                "browser_use_api_key", browser_api_key
+            )
 
             self.settings_manager.set_settings_key("voice", tts_voice)
-            self.settings_manager.set_settings_key("desired_sample_rate", tts_desired_sample_rate)
+            self.settings_manager.set_settings_key(
+                "desired_sample_rate", tts_desired_sample_rate
+            )
 
             self.settings_manager.set_settings_key("searxng_enabled", searxng_enabled)
 
@@ -1055,11 +1468,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid Input", str(ve))
         except Exception as e:
             logging.error(f"Error saving settings: {e}")
-            QMessageBox.critical(self, "Error", "An unexpected error occurred while saving settings.")
-
+            QMessageBox.critical(
+                self, "Error", "An unexpected error occurred while saving settings."
+            )
 
     ###########################################################################
-    # *** Added *** Voice Recording Logic
+    # Voice Recording Logic
     ###########################################################################
     def toggle_voice_recording(self):
         if not self.is_voice_recording:
@@ -1081,86 +1495,73 @@ class MainWindow(QMainWindow):
             )
             logging.info("Voice recording stopped.")
 
+
 ###############################################################################
 # Main entry point
 ###############################################################################
 def main():
+    # Configure logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
     # Initialize SettingsManager
     settings_manager = SettingsManager()
 
     # Create shared queues
-    agent_inbound_queue = queue.Queue()  # user messages from UI -> agent
-    agent_outbound_queue = queue.Queue()  # agent responses from agent -> UI
-    tts_inbound_queue = queue.Queue()  # text to speak from UI / agent -> TTS
-    stt_outbound_queue = queue.Queue()  # speech to text from STT -> UI
+    agent_inbound_queue = queue.Queue()    # User messages from UI -> ProxyAgent
+    agent_outbound_queue = queue.Queue()   # ProxyAgent responses -> UI
+    tts_inbound_queue = queue.Queue()      # Text to speak from UI / ProxyAgent -> TTS
+    stt_outbound_queue = queue.Queue()     # Speech to text from STT -> UI
 
-    # Create control and shutdown events
-    stt_is_recording_event = threading.Event()
-    agent_shutdown_event = threading.Event()
-    tts_shutdown_event = threading.Event()
-    stt_shutdown_event = threading.Event()
-
-    # Start the conversation agent thread
-    _conversation_agent_thread = threading.Thread(
-        target=conversation_agent_thread,
-        args=(
-            agent_inbound_queue,
-            agent_outbound_queue,
-            agent_shutdown_event,
-            settings_manager
-        ),
-        daemon=False,  # Set to False to manage shutdown manually
+    # Initialize Threads using the updated threading classes
+    proxy_agent_thread = ProxyAgentThread(
+        inbound_queue=agent_inbound_queue,
+        outbound_queue=agent_outbound_queue,
+        settings_manager=settings_manager,
     )
-    _conversation_agent_thread.start()
-    logging.info("Conversation Agent thread started.")
 
-    # Start the TTS thread
-    _tts_thread = threading.Thread(
-        target=tts_thread,
-        args=(
-            tts_inbound_queue,
-            tts_shutdown_event,
-            settings_manager
-        ),
-        daemon=False,  # Set to False to manage shutdown manually
+    tts_thread = TTSThread(
+        inbound_queue=tts_inbound_queue,
+        settings_manager=settings_manager
     )
-    _tts_thread.start()
-    logging.info("TTS thread started.")
 
-    # Start the STT thread
-    _stt_thread = threading.Thread(
-        target=stt_thread,
-        args=(
-            stt_is_recording_event,
-            stt_shutdown_event,
-            stt_outbound_queue,
-        ),
-        kwargs={
-            "vad_threshold": 0.75,
-            "sample_rate": 16000,
-            "silence_duration": 2.0,
-            "pre_speech_length": 0.5
-        },
-        daemon=False,  # Set to False to manage shutdown manually
+    stt_thread = STTThread(
+        outbound_queue=stt_outbound_queue,
+        # You can specify other optional parameters here if needed
     )
-    _stt_thread.start()
-    logging.info("STT thread started.")
+
+    # Start the threads
+    proxy_agent_thread.start()
+    logging.info("ProxyAgentThread started.")
+
+    tts_thread.start()
+    logging.info("TTSThread started.")
+
+    stt_thread.start()
+    logging.info("STTThread started.")
 
     # Initialize the QApplication
     app = QApplication(sys.argv)
 
     # Initialize the MainWindow with the settings manager and queues
+    # Access the is_recording_event from the STTThread instance
     window = MainWindow(
         settings_manager=settings_manager,
         agent_inbound=agent_inbound_queue,
         agent_outbound=agent_outbound_queue,
         tts_inbound=tts_inbound_queue,
         stt_outbound=stt_outbound_queue,
-        stt_is_recording_event=stt_is_recording_event,
+        stt_is_recording_event=stt_thread.is_recording_event,
     )
     window.setStyleSheet("background-color: #212121; color: white;")
     window.show()
 
+    # Setup for graceful shutdown
     shutdown_lock = threading.Lock()
     shutdown_initiated = False
 
@@ -1174,36 +1575,10 @@ def main():
 
         logging.info("Initiating graceful shutdown...")
 
-        # Signal the threads to stop
-        agent_shutdown_event.set()
-        tts_shutdown_event.set()
-        stt_shutdown_event.set()
-
-        # Send sentinel values to unblock queue.get()
-        agent_inbound_queue.put(None)
-        tts_inbound_queue.put(None)
-
-        # Send sentinel to outbound_queue if another thread is consuming it
-        agent_outbound_queue.put(None)
-        stt_outbound_queue.put(None)
-
-        # Wait for the threads to finish
-        logging.info("Waiting for Conversation Agent thread to terminate...")
-        _conversation_agent_thread.join(timeout=30)
-        if _conversation_agent_thread.is_alive():
-            logging.warning(
-                "Conversation Agent thread did not terminate within the timeout."
-            )
-
-        logging.info("Waiting for TTS thread to terminate...")
-        _tts_thread.join(timeout=30)
-        if _tts_thread.is_alive():
-            logging.warning("TTS thread did not terminate within the timeout.")
-
-        logging.info("Waiting for STT thread to terminate...")
-        _stt_thread.join(timeout=30)
-        if _stt_thread.is_alive():
-            logging.warning("STT thread did not terminate within the timeout.")
+        # Stop the threads using their stop() methods
+        proxy_agent_thread.stop()
+        tts_thread.stop()
+        stt_thread.stop()
 
         logging.info("All threads have been shut down.")
 
@@ -1220,6 +1595,7 @@ def main():
         # Ensure shutdown is called if app.exec() raises an exception
         shutdown_threads()
         sys.exit(exit_code)
+
 
 if __name__ == "__main__":
     main()

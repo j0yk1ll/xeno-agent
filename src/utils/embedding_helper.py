@@ -38,6 +38,9 @@ class EmbeddingHelper:
         self.model.eval()
         torch.set_grad_enabled(False)
 
+        # Expose the vector dimension
+        self.vector_dim = self.model.embed_dim
+
         # Audio transformation
         self.audio_transforms = ToTensor1D()
 
@@ -98,26 +101,30 @@ class EmbeddingHelper:
         # Return the normalized features to the specified device
         return text_features.to(self.device)
 
-    def create_image_embedding(self, image_bytes: bytes) -> torch.Tensor:
+    def create_image_embedding(self, image: Image.Image) -> torch.Tensor:
         """
-        Creates a normalized image embedding from raw in-memory image bytes. (ONLY PNG)
+        Creates a normalized image embedding from a PIL.Image object.
         """
-        # Convert bytes to a PIL image
-        image = Image.open(BytesIO(image_bytes)).convert('RGB')
+        # Ensure the image is in RGB format
+        image = image.convert('RGB')
+        
         # Apply transforms
         image_tensor = self.image_transforms(image).unsqueeze(0).to(self.device)
+        
         # Get image features
         _, image_features, _ = self.model(image=image_tensor)[0][0]
+        
         # Normalize
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        
         return image_features.squeeze(0)
 
-    def create_audio_embedding(self, audio_bytes: bytes) -> torch.Tensor:
+    def create_audio_embedding(self, audio_buffer: BytesIO) -> torch.Tensor:
         """
-        Creates a normalized audio embedding from raw in-memory audio bytes. (only WAV)
+        Creates a normalized audio embedding from a BytesIO object containing WAV data.
         """
-        with BytesIO(audio_bytes) as f:
-            waveform, original_sample_rate = torchaudio.load(f)
+        # Load audio from the BytesIO buffer
+        waveform, original_sample_rate = torchaudio.load(audio_buffer)  # [channels, samples]
 
         # If stereo, convert to mono
         if waveform.shape[0] > 1:
@@ -136,6 +143,8 @@ class EmbeddingHelper:
 
         # Get audio features
         audio_features, _, _ = self.model(audio=audio_tensor)[0][0]
+        
         # Normalize
         audio_features = audio_features / audio_features.norm(dim=-1, keepdim=True)
+        
         return audio_features.squeeze(0)

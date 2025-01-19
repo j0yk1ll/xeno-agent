@@ -1,11 +1,10 @@
-import os
 import shutil
 from pathlib import Path
 
 # Define paths
 xeno_dir = Path.home() / ".xeno"
-xeno_database_path = xeno_dir / "database.sqlite"
-xeno_files_path = xeno_dir / "files"
+xeno_database_path = xeno_dir / "memories.sqlite"
+xeno_files_path = xeno_dir / "memory_files"
 
 # Delete the xeno_db_path file
 if xeno_database_path.exists() and xeno_database_path.is_file():

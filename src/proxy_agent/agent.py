@@ -1,10 +1,12 @@
 import logging
 import re
-from typing import List, Optional
-from src.conversation_agent.tools.do_nothing import DoNothingTool
-from src.conversation_agent.tools.talk import TalkTool
-from src.conversation_agent.tools.solve_task import SolveTaskTool
-from src.conversation_agent.prompts import (
+from typing import Dict, List, Optional
+import uuid
+
+from src.proxy_agent.tools.do_nothing import DoNothingTool
+from src.proxy_agent.tools.talk import TalkTool
+from src.proxy_agent.tools.solve_task import SolveTaskTool
+from src.proxy_agent.prompts import (
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_OBSERVATIONS_SUMMARY,
     USER_PROMPT,
@@ -15,10 +17,11 @@ from src.utils.local_python_interpreter import LocalPythonInterpreter
 from src.utils.tool import Tool
 from src.utils.messages import AssistantMessage, Message, SystemMessage, UserMessage
 from src.utils.threads.task_agent_tread_manager import TaskAgentThreadManager
-from src.utils.episodic_memory import EpisodicMemory
+from src.utils.threads.memory_agent_thread_manager import MemoryAgentThreadManager
+from src.utils.types import FileType
 
 
-class ConversationAgent:
+class ProxyAgent:
     """
     Agent class that solves tasks step by step using a ReAct-like framework.
     It performs cycles of action (LLM-generated code) and observation (execution results).
@@ -27,7 +30,7 @@ class ConversationAgent:
     def __init__(
         self,
         task_agent_thread_manager: TaskAgentThreadManager,
-        memory: EpisodicMemory,
+        memory_agent_thread_manager: MemoryAgentThreadManager,
         completion_model_id: str,
         completion_api_base: Optional[str],
         completion_api_key: Optional[str],
@@ -36,10 +39,8 @@ class ConversationAgent:
         embedding_api_key: Optional[str],
         **kwargs,
     ):
-        logging.debug("Initializing Conversation Agent.")
+        logging.debug("Initializing Proxy Agent.")
         self.agent_name = self.__class__.__name__
-
-        self.memory = memory
 
         # Store llm parameters
         self.completion_model_id = completion_model_id
@@ -52,6 +53,8 @@ class ConversationAgent:
         self._initialize_llm()
 
         self.callback = None
+
+        self.memory_agent_thread_manager = memory_agent_thread_manager
 
         self.tools: List[Tool] = [
             TalkTool(self._on_talk),
@@ -73,6 +76,8 @@ class ConversationAgent:
         )
 
         self.observations = []
+        self.unprocessed_observations = []
+        self.observation_images = {}
 
     def _initialize_llm(self):
         """
@@ -89,59 +94,97 @@ class ConversationAgent:
         )
         logging.debug("LLM instance initialized.")
 
-    def add_text_observation(self, observation: str):
-        try:
-            self.memory.insert_text(observation)
-        except Exception as e:
-            raise Exception(f"An error occured while saving observation to episodic memory: {str(e)}")
-        
-        self._add_text_observation(observation)
+    def add_observation(self, source: str, text: str, files: List[Dict[str, any]]):
 
-    def _add_text_observation(self, observation: str):
+        observations = []
+
+        for file in files:
+            file_type = file['type']
+            file_object = file['object']
+
+            file_id = uuid.uuid4()
+
+            if file_type == FileType.IMAGE:
+                self.observation_images[file_id] = file_object
+                observations.append(f"You received an image from {source}. It's unique id is {file_id}.")
+
+            elif file_type == FileType.AUDIO:
+                # ignore for now. Might be important later for dynamic speaker identification or meetings.
+                continue
+            
+        observations.append(text)
+
+        self._add_observations(observations)
+
+    def _add_observations(self, observations: List[str]):
+        self.observations += observations
+        self.unprocessed_observations += observations
+
+        if len(self.unprocessed_observations) > 20:
+            self._save_observations_to_memory()
+
+        self._process_observations()
+
+    def _add_observation(self, observation: str):
         self.observations.append(observation)
-        self._on_observation(
-            self.observations[-21:]
-        )  # Get the last 21 observations (20 context + 1 most recent observation)
+        self.unprocessed_observations.append(observation)
 
-    def _summarize_observations(self, observations: List[str]):
+        if len(self.unprocessed_observations) > 20:
+            self._save_observations_to_memory()
+
+        self._process_observations()
+
+    # def _summarize_observations(self, observations: List[str]):
+    #     try:
+    #         logging.info("📝 Summarizing observations")
+    #         logging.debug(f"Observations: {observations}")
+    #         observations_string = "\n".join(
+    #             [
+    #                 f"Observation {i}: {observation}"
+    #                 for i, observation in enumerate(observations)
+    #             ]
+    #         )
+
+    #         messages = [
+    #             SystemMessage(SYSTEM_PROMPT_OBSERVATIONS_SUMMARY),
+    #             UserMessage(observations_string),
+    #         ]
+    #         llm_output = self.llm.generate(messages)
+    #     except Exception as e:
+    #         logging.error(f"❌ Failed to summarize observations. {str(e)}.")
+    #         raise Exception(f"Error when generating model output:\n{str(e)}")
+
+    #     return llm_output
+    
+    def _save_observations_to_memory(self):
         try:
-            logging.info("📝 Summarizing observations")
-            logging.debug(f"Observations: {observations}")
-            observations_string = "\n".join(
-                [
-                    f"Observation {i}: {observation}"
-                    for i, observation in enumerate(observations)
-                ]
-            )
+            self.memory_agent_thread_manager.save_memories_async(self.unprocessed_observations, self.observation_images)
+            # Reset unprocesed observations
+            self.unprocessed_observations = []
 
-            messages = [
-                SystemMessage(SYSTEM_PROMPT_OBSERVATIONS_SUMMARY),
-                UserMessage(observations_string),
-            ]
-            llm_output = self.llm.generate(messages)
         except Exception as e:
-            logging.error(f"❌ Failed to summarize observations. {str(e)}.")
-            raise Exception(f"Error when generating model output:\n{str(e)}")
+            logging.error(f"❌ Failed to save memories. {str(e)}.")
 
-        return llm_output
 
-    def _on_observation(self, observations: List[str]):
+    def _process_observations(self):
         try:
             logging.info("🏃 Generating action")
 
-            context_observations = observations[:-1]
-            most_recent_observation = observations[-1]
+            # TODO determine if images are still in context or can be removed
 
-            context = "No context yet."
+            most_recent_observation = self.observations[-1]
+            context_observations = self.observations[-21:-1] # Get the previous 20 observations for context
 
-            if len(context_observations) > 0:
-                context = self._summarize_observations(
-                    observations=context_observations
-                )
+            # TODO maybe remove this and instead improve the prompt to better use the raw observations for context without reacting to previous observations 
+            # context = "No context yet."
+            # if len(context_observations) > 0:
+            #     context = self._summarize_observations(
+            #         observations=context_observations
+            #     )
 
             user_prompt = USER_PROMPT.format(
                 observation=most_recent_observation,
-                context=context,
+                context=context_observations,
             )
 
             messages = [
@@ -167,15 +210,15 @@ class ConversationAgent:
             self._execute_with_retries(code, messages_with_parsed_code)
         except Exception as e:
             # If code couldn't be corrected or executed within the given retries let the agent know and exit
-            self.add_text_observation(str(e))
+            self.add_observation(str(e))
             return
 
     def _parse_with_retries(
         self, code_blob: str, messages: List[Message]
     ) -> Optional[str]:
+        logging.info("🔧 Parsing code")
         current_messages = messages.copy()
         try:
-            logging.info("🔧 Parsing code")
             return self._parse_code_blob(code_blob)
         except Exception as e:
             error_message = f"An error occurred while parsing code blob. {str(e)}."
@@ -215,7 +258,7 @@ class ConversationAgent:
 
         # We keep track of two different sets of messages
         # current_messages contains all correction attemps and the error messages to inform the model about already tried corrections
-        # inner_current_messages contains only the messages for the most recent correction attempt so the parser can focus only on the current corrected code blob
+        # inner_current_messages contains only the messages for the most recent correction attempt so the parser can focus only on the current corrected code blob        
         current_messages = messages.copy()
         inner_current_messages = messages.copy()
         execute_retries = 5
@@ -301,7 +344,7 @@ class ConversationAgent:
 
     def _on_solve_task_result(self, result: str):
         logging.debug(f"_on_solve_task_result with {result}")
-        self._add_text_observation(result)
+        self._add_observation(f"[TASK RESULT] {result}")
 
     def update_completion_model(
         self,

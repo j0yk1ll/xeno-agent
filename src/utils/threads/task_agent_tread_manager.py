@@ -8,7 +8,7 @@ from src.utils.threads.task_agent_thread import TaskAgentThread
 
 class TaskAgentThreadManager:
     """
-    Manages multiple TaskAgents. Each task is handled by a separate TaskAgentThread.
+    Class that manages multiple TaskAgents. Each task is handled by a separate TaskAgentThread.
     Automatically releases agent_threads after task completion.
     """
 
