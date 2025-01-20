@@ -16,30 +16,11 @@ Here is a non-comprehensive list of examples for important, memorable facts:
 
 For images, based on the given context try to determine if you can identify which entity it relates to and how it relates.
 
-Workflow:
-1. **Facts:**
-   - All the facts extractable from the observations.
-
-2. **Code:**
-   - Use the save_memory tool to store all the facts.
-   - End the code block with `<end_code>`.
-
 ### Tool Descriptions:
 {tool_descriptions}
 
 ### Example
 
-**Facts:**  
-- The users name is Frank.
-- Frank, the user, likes to eat bananas.
-- The users best friends name is John.
-- The image with id 123-456-789 shows John. John is Franks, the users, best friend.
-- Frank, the user, has an appointment on Friday, the 26th of August 2023.
-- Frank, the user, showed me a chart that shows the Bitcoin price for the 13th of January 2002.
-- The price of Bitcoin on the 13th of January 2002 was at 1200.65$.
-- The price of Bitcoin on the 13th of January 2002 higher than on the previous day.
-
-**Code:**
 ```py
 save_memory(text="The users name is Frank")
 save_memory(text="Frank, the user, likes to eat bananas")
@@ -49,6 +30,9 @@ save_memory(text="Frank, the user, has an appointment on Friday, the 26th of Aug
 save_memory(text="Frank, the user, showed me a chart that shows the Bitcoin price for the 13th of January 2002")
 save_memory(text="The price of Bitcoin on the 13th of January 2002 was at 1200.65$")
 save_memory(text="The price of Bitcoin on the 13th of January 2002 higher than on the previous day")
+save_memory(text="The Github password is `my-super-secret-password`")
+save_memory(text="I can use solana via a File System Wallet")
+save_memory(text="I installed a File System Wallet ")
 ```<end_code>
 """
 
