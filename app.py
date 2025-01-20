@@ -204,7 +204,7 @@ class MainWindow(QMainWindow):
         # Store settings manager
         self.settings_manager = settings_manager
 
-        # Read settings from the manager
+        # Initialize Completion Model settings
         self.completion_model_id = self.settings_manager.get_settings_key(
             "completion_model_id", "ollama/qwen2.5-coder"
         )
@@ -215,6 +215,7 @@ class MainWindow(QMainWindow):
             "completion_api_key", ""
         )
 
+        # Initialize Embedding Model settings
         self.embedding_model_id = self.settings_manager.get_settings_key(
             "embedding_model_id", "ollama/granite-embedding"
         )
@@ -223,6 +224,17 @@ class MainWindow(QMainWindow):
         )
         self.embedding_api_key = self.settings_manager.get_settings_key(
             "embedding_api_key", ""
+        )
+
+        # Initialize Vision Model settings
+        self.vision_model_id = self.settings_manager.get_settings_key(
+            "vision_model_id", "ollama/moondream"
+        )
+        self.vision_api_base = self.settings_manager.get_settings_key(
+            "vision_api_base", "http://localhost:11434"
+        )
+        self.vision_api_key = self.settings_manager.get_settings_key(
+            "vision_api_key", ""
         )
 
         # Browser Use Model
@@ -640,15 +652,17 @@ class MainWindow(QMainWindow):
         scroll_layout.setContentsMargins(0, 0, 0, 0)
         scroll_layout.setSpacing(15)  # Space between groups
 
-        # Create separate groups for Completion, Embedding, Browser Use, TTS, and STT
+        # Create separate groups for Completion, Embedding, Vision, Browser Use, TTS, and STT
         completion_model_group = self.create_model_settings_group("Completion Model")
         embedding_model_group = self.create_model_settings_group("Embedding Model")
+        vision_model_group = self.create_model_settings_group("Vision Model")
         browser_use_model_group = self.create_model_settings_group("Browser Use Model")
         tts_group = self.create_tts_settings_group("Text-to-Speech (TTS)")
 
         # Add groups to the scroll layout
         scroll_layout.addWidget(completion_model_group)
         scroll_layout.addWidget(embedding_model_group)
+        scroll_layout.addWidget(vision_model_group)
         scroll_layout.addWidget(browser_use_model_group)
         scroll_layout.addWidget(tts_group)
         scroll_layout.addStretch()  # Pushes content to the top
@@ -717,6 +731,22 @@ class MainWindow(QMainWindow):
         embedding_model_group_widgets["model_name"].setText(embedding_name)
         embedding_model_group_widgets["api_base"].setText(self.embedding_api_base or "")
         embedding_model_group_widgets["api_key"].setText(self.embedding_api_key or "")
+
+        vision_model_group_widgets = self.settings_widgets["Vision Model"]
+        if "/" in self.vision_model_id:
+            vision_provider, vision_name = self.vision_model_id.split("/", 1)
+        else:
+            vision_provider, vision_name = "ollama", "vision-model-default"  # Replace with your defaults
+        vision_model_group_widgets["model_provider"].setCurrentText(
+            vision_provider
+        )
+        vision_model_group_widgets["model_name"].setText(vision_name)
+        vision_model_group_widgets["api_base"].setText(
+            self.vision_api_base or ""
+        )
+        vision_model_group_widgets["api_key"].setText(
+            self.vision_api_key or ""
+        )
 
         # Set initial values for Browser Use Model
         browser_use_model_group_widgets = self.settings_widgets["Browser Use Model"]
@@ -1277,6 +1307,13 @@ class MainWindow(QMainWindow):
             embedding_api_base = embedding_widgets["api_base"].text().strip()
             embedding_api_key = embedding_widgets["api_key"].text().strip()
 
+            # Retrieve Vision Model settings
+            vision_widgets = self.settings_widgets["Vision Model"]
+            vision_provider = vision_widgets["model_provider"].currentText()
+            vision_name = vision_widgets["model_name"].text().strip()
+            vision_api_base = vision_widgets["api_base"].text().strip()
+            vision_api_key = vision_widgets["api_key"].text().strip()
+
             # Retrieve Browser Use Model settings
             browser_widgets = self.settings_widgets["Browser Use Model"]
             browser_provider = browser_widgets["model_provider"].currentText()
@@ -1303,6 +1340,7 @@ class MainWindow(QMainWindow):
             # Construct model IDs
             completion_model_id = f"{completion_provider}/{completion_name}"
             embedding_model_id = f"{embedding_provider}/{embedding_name}"
+            vision_model_id = f"{vision_provider}/{vision_name}"
             browser_use_model_id = f"{browser_provider}/{browser_name}"
 
             # Update settings in the manager
@@ -1324,6 +1362,16 @@ class MainWindow(QMainWindow):
             )
             self.settings_manager.set_settings_key(
                 "embedding_api_key", embedding_api_key
+            )
+
+            self.settings_manager.set_settings_key(
+                "vision_model_id", vision_model_id
+            )
+            self.settings_manager.set_settings_key(
+                "vision_api_base", vision_api_base
+            )
+            self.settings_manager.set_settings_key(
+                "vision_api_key", vision_api_key
             )
 
             self.settings_manager.set_settings_key(
@@ -1352,6 +1400,10 @@ class MainWindow(QMainWindow):
             self.embedding_model_id = embedding_model_id
             self.embedding_api_base = embedding_api_base
             self.embedding_api_key = embedding_api_key
+
+            self.vision_model_id = vision_model_id
+            self.vision_api_base = vision_api_base
+            self.vision_api_key = vision_api_key
 
             self.browser_use_model_id = browser_use_model_id
             self.browser_use_api_base = browser_api_base
@@ -1447,7 +1499,10 @@ def main():
     args = parser.parse_args()
 
     # Convert log level string to logging constant
-    log_level_str = args.log_level.upper()
+    if not args.log_level:
+        log_level_str = "INFO"
+    else:
+        log_level_str = args.log_level.upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
 
     # We'll place logs in ~/.xeno/app.log or C:\Users\<username>\.xeno/app.log
