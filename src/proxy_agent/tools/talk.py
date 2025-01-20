@@ -9,7 +9,7 @@ class TalkTool(Tool):
     inputs = {
         "utterance": {"type": "string", "description": "The words you want to say."}
     }
-    output_type = "any"
+    output_type = "null"
 
     def __init__(self, on_result: Callable):
         self.on_result = on_result

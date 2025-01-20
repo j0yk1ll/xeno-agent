@@ -15,7 +15,7 @@ You are an expert assistant capable of solving any task using Python code. You h
    - The output from `log()` in the Code section will be available in subsequent calls.
    - Use this information to inform your next Thought.
 
-Continue this cycle until you reach a final solution, then use the `result` function to provide the final result.
+Continue this cycle until you reach a final solution, then use the `result()` function to provide the final result.
 The final result should be a full conversational sentence.
 
 ### Rules:

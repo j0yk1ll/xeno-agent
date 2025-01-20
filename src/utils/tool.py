@@ -29,6 +29,8 @@ AUTHORIZED_TYPES = [
     "audio",
     "any",
     "object",
+    "null",
+    "array"
 ]
 
 

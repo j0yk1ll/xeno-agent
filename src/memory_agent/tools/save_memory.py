@@ -22,7 +22,7 @@ class SaveMemoryTool(Tool):
             "optional": True
         }
     }
-    output_type = "any"
+    output_type = "null"
 
     def __init__(self, memory_manager: MemoryManager, images: Dict[str, PIL.Image]):
         """
