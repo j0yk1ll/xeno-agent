@@ -241,10 +241,6 @@ class MainWindow(QMainWindow):
             self.settings_manager.get_settings_key("desired_sample_rate", 24000)
         )
 
-        self.searxng_enabled = self.settings_manager.get_settings_key(
-            "searxng_enabled", False
-        )
-
         self.stacked_widget = QStackedWidget()
         self.setCentralWidget(self.stacked_widget)
 
@@ -593,50 +589,6 @@ class MainWindow(QMainWindow):
 
         return container
 
-    def create_searxng_settings_group(self, title: str):
-        container = QWidget()
-        container_layout = QVBoxLayout()
-
-        label = QLabel(title)
-        label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        container_layout.addWidget(label)
-        container_layout.addSpacing(5)
-
-        group = QGroupBox()
-        layout = QVBoxLayout()
-
-        label_width = 120  # for uniform label widths
-
-        # Enable Searxng
-        searxng_enabled_layout = QHBoxLayout()
-        searxng_enabled_label = QLabel("Enable Searxng:")
-        searxng_enabled_label.setFixedWidth(label_width)
-        searxng_enabled_input = QCheckBox()
-        searxng_enabled_input.setStyleSheet(
-            """
-                QCheckBox {
-                    height: 30px;
-                    padding: 5px;
-                }
-            """
-        )
-
-        searxng_enabled_layout.addWidget(searxng_enabled_label)
-        searxng_enabled_layout.addWidget(searxng_enabled_input)
-
-        layout.addLayout(searxng_enabled_layout)
-        group.setLayout(layout)
-
-        container_layout.addWidget(group)
-        container.setLayout(container_layout)
-
-        # Store widgets for later access
-        self.settings_widgets["Searxng"] = {
-            "searxng_enabled": searxng_enabled_input,
-        }
-
-        return container
-
     def create_settings_screen(self):
         settings_screen = QWidget()
         main_layout = QVBoxLayout()
@@ -693,14 +645,12 @@ class MainWindow(QMainWindow):
         embedding_model_group = self.create_model_settings_group("Embedding Model")
         browser_use_model_group = self.create_model_settings_group("Browser Use Model")
         tts_group = self.create_tts_settings_group("Text-to-Speech (TTS)")
-        searxng_group = self.create_searxng_settings_group("Searxng")
 
         # Add groups to the scroll layout
         scroll_layout.addWidget(completion_model_group)
         scroll_layout.addWidget(embedding_model_group)
         scroll_layout.addWidget(browser_use_model_group)
         scroll_layout.addWidget(tts_group)
-        scroll_layout.addWidget(searxng_group)
         scroll_layout.addStretch()  # Pushes content to the top
 
         scroll_widget.setLayout(scroll_layout)
@@ -799,12 +749,6 @@ class MainWindow(QMainWindow):
         desired_sample_rate_input = tts_group_widgets.get("desired_sample_rate_input")
         if desired_sample_rate_input:
             desired_sample_rate_input.setText(str(self.tts_desired_sample_rate))
-
-        # Set initial state for Searxng
-        searxng_group_widgets = self.settings_widgets["Searxng"]
-        searxng_enabled_input = searxng_group_widgets.get("searxng_enabled")
-        if searxng_enabled_input:
-            searxng_enabled_input.setChecked(self.searxng_enabled)
 
         return settings_screen
 
@@ -1356,10 +1300,6 @@ class MainWindow(QMainWindow):
                     self.tts_desired_sample_rate
                 )  # Fallback to current value
 
-            # Retrieve Searxng settings
-            searxng_widget = self.settings_widgets["Searxng"]
-            searxng_enabled = searxng_widget["searxng_enabled"].isChecked()
-
             # Construct model IDs
             completion_model_id = f"{completion_provider}/{completion_name}"
             embedding_model_id = f"{embedding_provider}/{embedding_name}"
@@ -1401,8 +1341,6 @@ class MainWindow(QMainWindow):
                 "desired_sample_rate", tts_desired_sample_rate
             )
 
-            self.settings_manager.set_settings_key("searxng_enabled", searxng_enabled)
-
             # Save settings to the YAML file
             self.settings_manager.save_settings()
 
@@ -1421,8 +1359,6 @@ class MainWindow(QMainWindow):
 
             self.tts_voice = tts_voice
             self.tts_desired_sample_rate = tts_desired_sample_rate
-
-            self.searxng_enabled = searxng_enabled
 
             QMessageBox.information(
                 self, "Settings Saved", "Settings have been saved successfully."

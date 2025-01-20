@@ -166,17 +166,6 @@ uv run app.py
 
 ---
 
-## Optional Setup: Using SearxNG with Docker for Faster Web Searches
-
-### macOS, Linux (Debian/Ubuntu-Based Distributions), and Windows
-
-**Start the SearxNG Docker container**:  
-   ```bash
-   docker run --name searxng -d --restart unless-stopped -v $(pwd)/searxng:/etc/searxng:rw -e UWSGI_WORKERS=${SEARXNG_UWSGI_WORKERS:-4} -e UWSGI_THREADS=${SEARXNG_UWSGI_THREADS:-4} -p 8080:8080 docker.io/searxng/searxng:latest
-   ```
-
----
-
 ## Troubleshooting
 
 ### ImportError libcusparse.so.12: undefined symbol: __nvJitLinkComplete_12_4, version libnvJitLink.so.12

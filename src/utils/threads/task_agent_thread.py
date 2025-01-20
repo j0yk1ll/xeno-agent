@@ -9,7 +9,6 @@ from src.task_agent.tools.check_terminal_output import CheckTerminalOutputTool
 from src.task_agent.tools.python_interpreter import PythonInterpreterTool
 from src.task_agent.tools.terminal import TerminalTool
 from src.task_agent.tools.use_browser import UseBrowserTool
-from src.task_agent.tools.search import SearchTool
 
 
 class TaskAgentThread:
@@ -32,7 +31,6 @@ class TaskAgentThread:
         browser_use_model_id: str,
         browser_use_api_base: Optional[str],
         browser_use_api_key: Optional[str],
-        searxng_enabled: Optional[bool] = False,
         **kwargs,
     ):
         """
@@ -62,7 +60,6 @@ class TaskAgentThread:
                 browser_use_model_id,
                 browser_use_api_base,
                 browser_use_api_key,
-                searxng_enabled,
             ),
             self.loop,
         )
@@ -92,7 +89,6 @@ class TaskAgentThread:
         browser_use_model_id: str,
         browser_use_api_base: Optional[str],
         browser_use_api_key: Optional[str],
-        searxng_enabled: Optional[bool] = False,
     ):
         """(Async) Initialize the tools, browser, and agent."""
         # Unpack configuration
@@ -113,9 +109,6 @@ class TaskAgentThread:
             CheckTerminalOutputTool(),
         ]
 
-        if searxng_enabled:
-            logging.info("Search with searxng enabled.")
-            tools.append(SearchTool())
 
         # Create the agent
         self.agent = TaskAgent(

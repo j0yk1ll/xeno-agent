@@ -86,8 +86,5 @@ cython_debug/
 # logs
 *.log
 
-# searxng
-uwsgi.ini
-
 # custom settings
 .settings.yml
