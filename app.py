@@ -1,3 +1,4 @@
+import argparse
 from io import BytesIO
 import logging
 import mimetypes
@@ -37,44 +38,6 @@ from src.utils.threads.stt_thread import STTThread
 from src.utils.tts import get_available_voices
 from src.utils.settings_manager import SettingsManager
 from src.utils.types import FileType
-
-###############################################################################
-# Configure logging
-###############################################################################
-LOGGING_LEVEL = logging.INFO
-
-# We'll place logs in ~/.xeno/app.log or C:\Users\<username>\.xeno/app.log
-xeno_dir = Path.home() / ".xeno"
-xeno_dir.mkdir(parents=True, exist_ok=True)  # Ensure the folder exists
-
-log_file_path = xeno_dir / "app.log"
-
-logger = logging.getLogger()
-logger.setLevel(LOGGING_LEVEL)
-
-# Stream handler
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setLevel(LOGGING_LEVEL)
-
-# File handler with absolute path in ~/.xeno or C:\Users\<username>\.xeno
-try:
-    file_handler = logging.FileHandler(log_file_path, mode="w")
-    file_handler.setLevel(LOGGING_LEVEL)
-except Exception as e:
-    stream_handler.setLevel(LOGGING_LEVEL)
-    logger.error(f"Failed to create file handler: {e}")
-    file_handler = None
-
-# Formatter
-formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-stream_handler.setFormatter(formatter)
-if file_handler:
-    file_handler.setFormatter(formatter)
-
-# Add handlers to the logger
-logger.addHandler(stream_handler)
-if file_handler:
-    logger.addHandler(file_handler)
 
 
 ###############################################################################
@@ -1072,7 +1035,9 @@ class MainWindow(QMainWindow):
             files = []
 
             for attached_file in list(self.attached_files):
-                file_path = attached_file['path']  # Assuming each attached_file is a dict with 'path'
+                file_path = attached_file[
+                    "path"
+                ]  # Assuming each attached_file is a dict with 'path'
                 # Determine the MIME type based on the file extension
                 mime_type, _ = mimetypes.guess_type(file_path)
 
@@ -1095,10 +1060,10 @@ class MainWindow(QMainWindow):
                         # Open the image using PIL
                         with PIL.Image.open(file_path) as image:
                             # Check the image format
-                            if image.format.lower() in ['jpg', 'jpeg']:
+                            if image.format.lower() in ["jpg", "jpeg"]:
                                 # Convert JPG/JPEG to PNG
                                 png_image_io = BytesIO()
-                                image.save(png_image_io, format='PNG')
+                                image.save(png_image_io, format="PNG")
                                 png_image_io.seek(0)  # Reset pointer to the beginning
                                 file_object = png_image_io
                             else:
@@ -1196,9 +1161,7 @@ class MainWindow(QMainWindow):
                     break  # Sentinel value to ignore
                 logging.debug(f"Received transcription: {transcription}")
                 # Send transcription to agent
-                message_payload = {
-                    "text": transcription
-                }
+                message_payload = {"text": transcription}
                 self.agent_inbound.put(message_payload)
             except queue.Empty:
                 break  # queue is empty
@@ -1501,22 +1464,99 @@ class MainWindow(QMainWindow):
 ###############################################################################
 def main():
     # Configure logging
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ]
+    # Initialize the argument parser
+    parser = argparse.ArgumentParser(description="Xeno Agent Application")
+
+    # Create a mutually exclusive group to ensure only one log level is set
+    log_group = parser.add_mutually_exclusive_group()
+
+    # Add short options for each log level
+    log_group.add_argument(
+        "-D",
+        action="store_const",
+        const="DEBUG",
+        dest="log_level",
+        help="Set log level to DEBUG",
     )
+    log_group.add_argument(
+        "-I",
+        action="store_const",
+        const="INFO",
+        dest="log_level",
+        help="Set log level to INFO",
+    )
+    log_group.add_argument(
+        "-W",
+        action="store_const",
+        const="WARNING",
+        dest="log_level",
+        help="Set log level to WARNING",
+    )
+    log_group.add_argument(
+        "-E",
+        action="store_const",
+        const="ERROR",
+        dest="log_level",
+        help="Set log level to ERROR",
+    )
+    log_group.add_argument(
+        "-C",
+        action="store_const",
+        const="CRITICAL",
+        dest="log_level",
+        help="Set log level to CRITICAL",
+    )
+
+    # Parse the arguments
+    args = parser.parse_args()
+
+    # Convert log level string to logging constant
+    log_level_str = args.log_level.upper()
+    log_level = getattr(logging, log_level_str, logging.INFO)
+
+    # We'll place logs in ~/.xeno/app.log or C:\Users\<username>\.xeno/app.log
+    xeno_dir = Path.home() / ".xeno"
+    xeno_dir.mkdir(parents=True, exist_ok=True)  # Ensure the folder exists
+
+    log_file_path = xeno_dir / "app.log"
+
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    # Stream handler
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setLevel(log_level)
+
+    # File handler with absolute path in ~/.xeno or C:\Users\<username>\.xeno
+    try:
+        file_handler = logging.FileHandler(log_file_path, mode="w")
+        file_handler.setLevel(log_level)
+    except Exception as e:
+        stream_handler.setLevel(log_level)
+        logger.error(f"Failed to create file handler: {e}")
+        file_handler = None
+
+    # Formatter
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    stream_handler.setFormatter(formatter)
+    if file_handler:
+        file_handler.setFormatter(formatter)
+
+    # Add handlers to the logger
+    logger.addHandler(stream_handler)
+    if file_handler:
+        logger.addHandler(file_handler)
+
+    logger.info(f"Logging initialized with level: {log_level_str}")
 
     # Initialize SettingsManager
     settings_manager = SettingsManager()
 
     # Create shared queues
-    agent_inbound_queue = queue.Queue()    # User messages from UI -> ProxyAgent
-    agent_outbound_queue = queue.Queue()   # ProxyAgent responses -> UI
-    tts_inbound_queue = queue.Queue()      # Text to speak from UI / ProxyAgent -> TTS
-    stt_outbound_queue = queue.Queue()     # Speech to text from STT -> UI
+    agent_inbound_queue = queue.Queue()  # User messages from UI -> ProxyAgent
+    agent_outbound_queue = queue.Queue()  # ProxyAgent responses -> UI
+    tts_inbound_queue = queue.Queue()  # Text to speak from UI / ProxyAgent -> TTS
+    stt_outbound_queue = queue.Queue()  # Speech to text from STT -> UI
 
     # Initialize Threads using the updated threading classes
     proxy_agent_thread = ProxyAgentThread(
@@ -1526,8 +1566,7 @@ def main():
     )
 
     tts_thread = TTSThread(
-        inbound_queue=tts_inbound_queue,
-        settings_manager=settings_manager
+        inbound_queue=tts_inbound_queue, settings_manager=settings_manager
     )
 
     stt_thread = STTThread(
