@@ -12,6 +12,7 @@ from browser_use import (
 )
 from browser_use.browser.context import BrowserContext
 from langchain_community.chat_models import ChatLiteLLM
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 # Load environment variables
 load_dotenv(override=True)
@@ -137,12 +138,22 @@ class Browser:
         if not context:
             raise ValueError(f"Session {session_id} not found")
 
-        # Initialize the language model (assuming it's lightweight)
-        llm = ChatLiteLLM(
-            model=self.model_id,
-            api_base=self.api_base,
-            api_key=self.api_key,
-        )
+        # Initialize the language model
+        # TODO remove when fixed - the if / else block is a temporary workaround for https://github.com/langchain-ai/langchain/issues/29308
+        if self.model_id.startswith("gemini"):
+            model_provider, model_name = self.model_id.split("/")
+            llm = ChatGoogleGenerativeAI(
+                model=model_name,
+                api_base=self.api_base,
+                api_key=self.api_key,
+            )
+        else:
+            llm = ChatLiteLLM(
+                model=self.model_id,
+                api_base=self.api_base,
+                api_key=self.api_key,
+            )
+
 
         # Create an Agent using the specified browser context
         agent = BrowserUseAgent(
