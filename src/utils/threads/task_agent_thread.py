@@ -6,7 +6,7 @@ from typing import Callable, Optional
 from src.utils.browser import Browser
 from src.task_agent.agent import TaskAgent
 from src.task_agent.tools.check_terminal_output import CheckTerminalOutputTool
-from src.task_agent.tools.python_interpreter import PythonInterpreterTool
+from task_agent.tools.execute_code import ExecuteCodeTool
 from src.task_agent.tools.terminal import TerminalTool
 from src.task_agent.tools.use_browser import UseBrowserTool
 
@@ -103,7 +103,7 @@ class TaskAgentThread:
 
         # Define available tools
         tools = [
-            PythonInterpreterTool(),
+            ExecuteCodeTool(),
             UseBrowserTool(browser=self.browser, loop=self.loop),
             TerminalTool(),
             CheckTerminalOutputTool(),

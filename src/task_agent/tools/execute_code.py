@@ -20,7 +20,7 @@ class ExecuteCodeTool(Tool):
 
     def forward(self, code: str) -> str:
         logging.info(f"🧰 Using tool: {self.name}")
-        logging.debug(f"Evaluating Python code with PythonInterpreterTool: {code}")
+        logging.debug(f"Evaluating Python code with ExecuteCodeTool: {code}")
         output, _, error = self.local_python_interpreter(code)
         logging.debug(f"Output: {output}")
 
