@@ -5,10 +5,8 @@ from typing import Optional
 
 from src.proxy_agent.agent import ProxyAgent
 from src.utils.settings_manager import SettingsManager
-from src.utils.threads.task_agent_tread_manager import TaskAgentThreadManager
-from src.utils.embedding_helper import EmbeddingHelper
-from src.utils.memory_manager import MemoryManager
-from src.utils.threads.memory_agent_thread_manager import MemoryAgentThreadManager
+from src.utils.browser.browser import Browser
+from src.utils.llms.completion import CompletionLLM
 
 
 class ProxyAgentThread:
@@ -37,30 +35,23 @@ class ProxyAgentThread:
         self.thread: Optional[threading.Thread] = None
 
         # Load initial settings
-        self.settings = self.settings_manager.get_settings()
+        settings = self.settings_manager.get_settings()
 
-        # Initialize helpers and managers
-        self.embedding_helper = EmbeddingHelper()
-        logging.debug("EmbeddingHelper created.")
-        self.memory_manager = MemoryManager(embedding_helper=self.embedding_helper)
-        logging.debug("MemoryManager created.")
-        self.task_agent_thread_manager = TaskAgentThreadManager(self.settings)
-        logging.debug("TaskAgentThreadManager created.")
-        self.memory_agent_thread_manager = MemoryAgentThreadManager(
-            settings_manager=self.settings_manager, memory_manager=self.memory_manager
+        self.browser = Browser()
+
+        completion_llm = CompletionLLM(
+            model_id=settings['completion_model_id'],
+            api_base=settings['completion_api_base'],
+            api_key=settings['completion_api_key'],
+            requests_per_minute=5,
         )
-        logging.debug("MemoryAgentThreadManager created.")
 
         # Initialize the ProxyAgent
         self.proxy_agent = ProxyAgent(
-            task_agent_thread_manager=self.task_agent_thread_manager,
-            memory_agent_thread_manager=self.memory_agent_thread_manager,
-            memory_manager=self.memory_manager,
-            **self.settings
+            browser=self.browser,
+            completion_llm=completion_llm,
+            on_response=self._put_response,
         )
-
-        # Assign callback for responses
-        self.proxy_agent.callback = self._put_response
 
         # Register the settings update callback
         self.settings_manager.on_update(self._update_settings)
@@ -85,13 +76,15 @@ class ProxyAgentThread:
         settings = self.settings_manager.get_settings()
         logging.debug("ProxyAgentThread updating settings.")
 
-        # Update TaskAgentThreadManager settings
-        self.task_agent_thread_manager.update_settings(settings)
-        logging.debug("TaskAgentThreadManager settings updated.")
+        completion_llm = CompletionLLM(
+            model_id=settings['completion_model_id'],
+            api_base=settings['completion_api_base'],
+            api_key=settings['completion_api_key'],
+            requests_per_minute=5,
+        )
 
         # Update ProxyAgent models
-        self.proxy_agent.update_completion_model(**settings)
-        self.proxy_agent.update_embedding_model(**settings)
+        self.proxy_agent.update_completion_llm(completion_llm)
         logging.debug("ProxyAgent models updated with new settings.")
 
     def start(self):
@@ -103,13 +96,13 @@ class ProxyAgentThread:
             return
 
         self.shutdown_event.clear()
-        self.thread = threading.Thread(target=self._run, daemon=True, name="ProxyAgentThread")
+        self.thread = threading.Thread(
+            target=self._run, daemon=True, name="ProxyAgentThread"
+        )
         self.thread.start()
-        logging.debug(f"Thread '{self.thread.name}' started with ID {self.thread.ident}.")
-
-        self.memory_agent_thread_manager.start()
-        logging.debug("MemoryAgentThreadManager started.")
-
+        logging.debug(
+            f"Thread '{self.thread.name}' started with ID {self.thread.ident}."
+        )
         logging.info("ProxyAgentThread started.")
 
     def stop(self):
@@ -126,15 +119,15 @@ class ProxyAgentThread:
 
         if self.thread.is_alive():
             self.thread.join()
-            logging.debug(f"Thread '{self.thread.name}' with ID {self.thread.ident} has been joined and stopped.")
+            logging.debug(
+                f"Thread '{self.thread.name}' with ID {self.thread.ident} has been joined and stopped."
+            )
         else:
-            logging.debug(f"Thread '{self.thread.name}' is not alive and does not need to be joined.")
+            logging.debug(
+                f"Thread '{self.thread.name}' is not alive and does not need to be joined."
+            )
 
         self.thread = None
-
-        self.memory_agent_thread_manager.stop()
-        logging.debug("MemoryAgentThreadManager stopped.")
-
         logging.info("ProxyAgentThread stopped.")
 
     def _run(self):
@@ -156,9 +149,12 @@ class ProxyAgentThread:
                     logging.debug(f"ProxyAgentThread received message: {message}")
 
                     # Add observation to ProxyAgent
-                    user_text = message['text']
-                    user_files = message.get("files", [])
-                    self.proxy_agent.add_observation("user", user_text, user_files)
+                    message_text = message["text"]
+                    message_source = message.get("source", "unknown")
+                    message_files = message.get("files", [])
+                    self.proxy_agent.add_observation(
+                        message_source, message_text, message_files
+                    )
                     self.inbound_queue.task_done()
                 except queue.Empty:
                     continue  # No message received, continue the loop
@@ -170,6 +166,5 @@ class ProxyAgentThread:
 
         finally:
             # Ensure that resources are cleaned up properly
-            self.task_agent_thread_manager.shutdown()
-            logging.debug("TaskAgentThreadManager shutdown completed.")
+            self.browser.close()
             logging.info("ProxyAgentThread shutting down.")

@@ -83,7 +83,6 @@ class Tool:
     name: str
     description: str
     inputs: Dict[str, Dict[str, Union[str, type, bool]]]
-    output_type: str
 
     def __init__(self, *args, **kwargs) -> None:
         self.is_initialized: bool = False
@@ -108,7 +107,6 @@ class Tool:
             "description": str,
             "name": str,
             "inputs": dict,
-            "output_type": str,
         }
 
         for attr, expected_type in required_attributes.items():
@@ -134,12 +132,7 @@ class Tool:
                     f"Input '{input_name}': type '{input_content['type']}' is not an authorized value. "
                     f"Must be one of {AUTHORIZED_TYPES}."
                 )
-
-        if getattr(self, "output_type", None) not in AUTHORIZED_TYPES:
-            raise ValueError(
-                f"output_type '{self.output_type}' is not authorized. Must be one of {AUTHORIZED_TYPES}."
-            )
-
+            
         if not hasattr(self, "forward"):
             raise AttributeError("Subclass must implement the 'forward' method.")
 

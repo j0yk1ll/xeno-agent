@@ -1,24 +1,38 @@
 import logging
 import re
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 import uuid
 
+from src.proxy_agent.tools.click_element import ClickElementTool
+from src.proxy_agent.tools.close_browser_context import CloseBrowserContextTool
+from src.proxy_agent.tools.create_browser_context import CreateBrowserContextTool
+from src.proxy_agent.tools.run_code import RunCodeTool
+from src.proxy_agent.tools.extract_page_content import ExtractPageContentTool
+from src.proxy_agent.tools.get_dropdown_options import GetDropdownOptionsTool
+from src.proxy_agent.tools.go_back import GoBackTool
+from src.proxy_agent.tools.go_to_url import GoToUrlTool
+from src.proxy_agent.tools.input_text import InputTextTool
+from src.proxy_agent.tools.open_tab import OpenTabTool
+from src.proxy_agent.tools.scroll_page import ScrollPageTool
+from src.proxy_agent.tools.scroll_to_text import ScrollToTextTool
+from src.proxy_agent.tools.search_google import SearchGoogleTool
+from src.proxy_agent.tools.select_dropdown_option import SelectDropdownOptionTool
+from src.proxy_agent.tools.send_keys import SendKeysTool
+from src.proxy_agent.tools.switch_tab import SwitchTabTool
+from src.proxy_agent.tools.use_terminal import UseTerminalTool
 from src.proxy_agent.tools.do_nothing import DoNothingTool
 from src.proxy_agent.tools.talk import TalkTool
-from src.proxy_agent.tools.solve_task import SolveTaskTool
 from src.proxy_agent.prompts import (
     SYSTEM_PROMPT,
-    SYSTEM_PROMPT_OBSERVATIONS_SUMMARY,
     USER_PROMPT,
     USER_PROMPT_PARSE_CODE_ERROR,
 )
-from src.utils.llm import LLM
 from src.utils.local_python_interpreter import LocalPythonInterpreter
 from src.utils.tool import Tool
 from src.utils.messages import AssistantMessage, Message, SystemMessage, UserMessage
-from src.utils.threads.task_agent_tread_manager import TaskAgentThreadManager
-from src.utils.threads.memory_agent_thread_manager import MemoryAgentThreadManager
 from src.utils.types import FileType
+from src.utils.browser.browser import Browser
+from src.utils.llms.completion import CompletionLLM
 
 
 class ProxyAgent:
@@ -29,44 +43,46 @@ class ProxyAgent:
 
     def __init__(
         self,
-        task_agent_thread_manager: TaskAgentThreadManager,
-        memory_agent_thread_manager: MemoryAgentThreadManager,
-        completion_model_id: str,
-        completion_api_base: Optional[str],
-        completion_api_key: Optional[str],
-        embedding_model_id: str,
-        embedding_api_base: Optional[str],
-        embedding_api_key: Optional[str],
-        **kwargs,
+        browser: Browser,
+        completion_llm: CompletionLLM,
+        on_response: Callable
     ):
         logging.debug("Initializing Proxy Agent.")
         self.agent_name = self.__class__.__name__
 
-        # Store llm parameters
-        self.completion_model_id = completion_model_id
-        self.completion_api_base = completion_api_base
-        self.completion_api_key = completion_api_key
-        self.embedding_model_id = embedding_model_id
-        self.embedding_api_base = embedding_api_base
-        self.embedding_api_key = embedding_api_key
+        self.browser = browser
 
-        self._initialize_llm()
+        self.completion_llm = completion_llm
 
-        self.callback = None
-
-        self.memory_agent_thread_manager = memory_agent_thread_manager
+        self.on_response = on_response
 
         self.tools: List[Tool] = [
-            TalkTool(self._on_talk),
-            SolveTaskTool(task_agent_thread_manager, self._on_solve_task_result),
+            TalkTool(self._talk),
             DoNothingTool(),
+            RunCodeTool(on_observation=self._add_observation),
+            UseTerminalTool(on_observation=self._add_observation),
+            CreateBrowserContextTool(browser=self.browser, on_observation=self._add_observation),
+            CloseBrowserContextTool(on_observation=self._add_observation),
+            ClickElementTool(on_observation=self._add_observation),
+            ExtractPageContentTool(on_observation=self._add_observation),
+            GetDropdownOptionsTool(on_observation=self._add_observation),
+            GoBackTool(on_observation=self._add_observation),
+            GoToUrlTool(on_observation=self._add_observation),
+            InputTextTool(on_observation=self._add_observation),
+            OpenTabTool(on_observation=self._add_observation),
+            ScrollPageTool(on_observation=self._add_observation),
+            ScrollToTextTool(on_observation=self._add_observation),
+            SearchGoogleTool(on_observation=self._add_observation),
+            SelectDropdownOptionTool(on_observation=self._add_observation),
+            SendKeysTool(on_observation=self._add_observation),
+            SwitchTabTool(on_observation=self._add_observation),
         ]
 
         self.python_interpreter = LocalPythonInterpreter(self.tools)
 
         self.tool_descriptions = "\n".join(
             [
-                f"-{tool.name}({tool.inputs}) -> ({tool.output_type}): {tool.description}"
+                f"-{tool.name}({tool.inputs}): {tool.description}"
                 for tool in self.tools
             ]
         )
@@ -79,20 +95,8 @@ class ProxyAgent:
         self.unprocessed_observations = []
         self.observation_images = {}
 
-    def _initialize_llm(self):
-        """
-        Initialize the LLM instance with the current parameters.
-        """
-        self.llm = LLM(
-            completion_model_id=self.completion_model_id,
-            completion_api_base=self.completion_api_base,
-            completion_api_key=self.completion_api_key,
-            embedding_model_id=self.embedding_model_id,
-            embedding_api_base=self.embedding_api_base,
-            embedding_api_key=self.embedding_api_key,
-            completion_requests_per_minute=5,
-        )
-        logging.debug("LLM instance initialized.")
+    def update_completion_llm(self, completion_llm: CompletionLLM):
+        self.completion_llm = completion_llm
 
     def add_observation(self, source: str, text: str, files: List[Dict[str, any]]):
 
@@ -120,67 +124,20 @@ class ProxyAgent:
         self.observations += observations
         self.unprocessed_observations += observations
 
-        if len(self.unprocessed_observations) > 20:
-            self._save_observations_to_memory()
-
         self._process_observations()
 
     def _add_observation(self, observation: str):
         self.observations.append(observation)
         self.unprocessed_observations.append(observation)
 
-        if len(self.unprocessed_observations) > 20:
-            self._save_observations_to_memory()
-
         self._process_observations()
-
-    # def _summarize_observations(self, observations: List[str]):
-    #     try:
-    #         logging.info("📝 Summarizing observations")
-    #         logging.debug(f"Observations: {observations}")
-    #         observations_string = "\n".join(
-    #             [
-    #                 f"Observation {i}: {observation}"
-    #                 for i, observation in enumerate(observations)
-    #             ]
-    #         )
-
-    #         messages = [
-    #             SystemMessage(SYSTEM_PROMPT_OBSERVATIONS_SUMMARY),
-    #             UserMessage(observations_string),
-    #         ]
-    #         llm_output = self.llm.generate(messages)
-    #     except Exception as e:
-    #         logging.error(f"❌ Failed to summarize observations. {str(e)}.")
-    #         raise Exception(f"Error when generating model output:\n{str(e)}")
-
-    #     return llm_output
-    
-    def _save_observations_to_memory(self):
-        try:
-            self.memory_agent_thread_manager.save_memories_async(self.unprocessed_observations, self.observation_images)
-            # Reset unprocesed observations
-            self.unprocessed_observations = []
-
-        except Exception as e:
-            logging.error(f"❌ Failed to save memories. {str(e)}.")
-
 
     def _process_observations(self):
         try:
             logging.info("🏃 Generating action")
 
-            # TODO determine if images are still in context or can be removed
-
             most_recent_observation = self.observations[-1]
             context_observations = self.observations[-21:-1] # Get the previous 20 observations for context
-
-            # TODO maybe remove this and instead improve the prompt to better use the raw observations for context without reacting to previous observations 
-            # context = "No context yet."
-            # if len(context_observations) > 0:
-            #     context = self._summarize_observations(
-            #         observations=context_observations
-            #     )
 
             user_prompt = USER_PROMPT.format(
                 observation=most_recent_observation,
@@ -192,7 +149,7 @@ class ProxyAgent:
                 UserMessage(user_prompt),
             ]
 
-            code_blob = self.llm.generate(messages)
+            code_blob = self.completion_llm.call(messages)
         except Exception as e:
             logging.error(f"❌ Failed to generate action. {str(e)}.")
             raise Exception(f"Error when generating model output:\n{str(e)}")
@@ -287,7 +244,7 @@ class ProxyAgent:
                     inner_current_messages.append(
                         UserMessage(error_message)
                     )  # Add error message of the latest correction attempt
-                    corrected_code_blob = self.llm.generate(
+                    corrected_code_blob = self.completion_llm.call(
                         current_messages, stop_sequences=["<end_action>"]
                     )  # Add corrected code
                     inner_current_messages.append(
@@ -335,45 +292,6 @@ class ProxyAgent:
             )
             raise Exception(error_message)
 
-    def _on_talk(self, utterance: str):
+    def _talk(self, utterance: str):
         logging.debug(f"_on_talk with {utterance}")
-        if self.callback is not None:
-            self.callback(utterance)
-        else:
-            logging.warning("No callback defined")
-
-    def _on_solve_task_result(self, result: str):
-        logging.debug(f"_on_solve_task_result with {result}")
-        self._add_observation(f"[TASK RESULT] {result}")
-
-    def update_completion_model(
-        self,
-        completion_model_id: str,
-        completion_api_base: Optional[str],
-        completion_api_key: Optional[str],
-        **kwargs,
-    ):
-        """
-        Update the completion model parameters and reinitialize the LLM.
-        """
-        self.completion_model_id = completion_model_id
-        self.completion_api_base = completion_api_base
-        self.completion_api_key = completion_api_key
-        logging.debug("Completion model parameters updated.")
-        self._initialize_llm()
-
-    def update_embedding_model(
-        self,
-        embedding_model_id: str,
-        embedding_api_base: Optional[str],
-        embedding_api_key: Optional[str],
-        **kwargs,
-    ):
-        """
-        Update the embedding model parameters and reinitialize the LLM.
-        """
-        self.embedding_model_id = embedding_model_id
-        self.embedding_api_base = embedding_api_base
-        self.embedding_api_key = embedding_api_key
-        logging.debug("Embedding model parameters updated.")
-        self._initialize_llm()
+        self.on_response(utterance)

@@ -6,7 +6,6 @@ class DoNothingTool(Tool):
     name = "do_nothing"
     description = "Do nothing."
     inputs = {}
-    output_type = "null"
 
-    def forward(self) -> None:
+    def forward(self):
         logging.info(f"🧰 Using tool: {self.name}")

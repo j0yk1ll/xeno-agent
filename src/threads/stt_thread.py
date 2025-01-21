@@ -28,7 +28,7 @@ class STTThread:
         self.queue_maxsize = queue_maxsize
 
         self.outbound_queue = outbound_queue
-        self.is_recording_event = threading.Event()
+        self.is_active_event = threading.Event()
         self.shutdown_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
 
@@ -93,11 +93,11 @@ class STTThread:
         try:
             while not self.shutdown_event.is_set():
                 # Manage recording state
-                if self.is_recording_event.is_set() and not is_recording:
+                if self.is_active_event.is_set() and not is_recording:
                     self.audio_recorder.start_recording()
                     is_recording = True
                     logging.info("Recording started.")
-                elif not self.is_recording_event.is_set() and is_recording:
+                elif not self.is_active_event.is_set() and is_recording:
                     self.audio_recorder.stop_recording()
                     is_recording = False
                     logging.info("Recording stopped.")

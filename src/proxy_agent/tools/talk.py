@@ -9,12 +9,11 @@ class TalkTool(Tool):
     inputs = {
         "utterance": {"type": "string", "description": "The words you want to say."}
     }
-    output_type = "null"
 
-    def __init__(self, on_result: Callable):
-        self.on_result = on_result
+    def __init__(self, on_observation: Callable[[str], None]):
+        self.on_observation = on_observation
         super().__init__()
 
-    def forward(self, utterance: str) -> str:
+    def forward(self, utterance: str):
         logging.info(f"🧰 Using tool: {self.name}")
-        self.on_result(utterance)
+        self.on_observation(utterance)

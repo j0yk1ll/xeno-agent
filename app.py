@@ -27,17 +27,17 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QFrame,
-    QCheckBox,
     QFileDialog,
 )
 from PySide6 import QtSvg, QtGui, QtCore
 
-from src.utils.threads.proxy_agent_thread import ProxyAgentThread
-from src.utils.threads.tts_thread import TTSThread
-from src.utils.threads.stt_thread import STTThread
 from src.utils.tts import get_available_voices
 from src.utils.settings_manager import SettingsManager
 from src.utils.types import FileType
+from src.threads.proxy_agent_thread import ProxyAgentThread
+from src.threads.tts_thread import TTSThread
+from src.threads.stt_thread import STTThread
+from src.threads.screen_capture_thread import ScreenCaptureThread
 
 
 ###############################################################################
@@ -183,7 +183,9 @@ class MainWindow(QMainWindow):
         agent_outbound: queue.Queue,
         tts_inbound: queue.Queue,
         stt_outbound: queue.Queue,
-        stt_is_recording_event: threading.Event,
+        stt_is_active_event: threading.Event,
+        screen_capture_outbound: queue.Queue,
+        screen_capture_is_active_event: threading.Event,
     ):
         super().__init__()
         self.setWindowTitle("Xeno Agent")
@@ -193,13 +195,20 @@ class MainWindow(QMainWindow):
         self.agent_inbound = agent_inbound  # UI -> agent
         self.agent_outbound = agent_outbound  # agent -> UI
         self.tts_inbound = tts_inbound  # UI -> tts
-        self.stt_outbound = stt_outbound  # stt -> UI
-
+        self.stt_outbound = stt_outbound  # stt -> UI -> agent
+        self.screen_capture_outbound = screen_capture_outbound  # screen_capture -> UI -> agent
+        
         # Initialize voice recording state
-        self.is_voice_recording = False  # Tracks if voice recording is active
+        self.is_stt_active = False  # Tracks if voice recording is active
 
         # Register STT control event
-        self.stt_is_recording_event = stt_is_recording_event
+        self.stt_is_active_event = stt_is_active_event
+
+        # Initialize screen_capture state
+        self.is_screen_capture_active = False  # Tracks if screen capture is active
+
+        # Register Screencapture control event
+        self.screen_capture_is_active_event = screen_capture_is_active_event
 
         # Store settings manager
         self.settings_manager = settings_manager
@@ -275,7 +284,7 @@ class MainWindow(QMainWindow):
         self.animation.setDuration(300)
         self.animation.setEasingCurve(QtCore.QEasingCurve.OutCubic)
 
-        # Initialize separate timers for agent and STT queues
+        # Initialize timerss
         self.agent_timer = QtCore.QTimer()
         self.agent_timer.timeout.connect(self.listen_to_agent_responses)
         self.agent_timer.start(200)  # check every 200ms
@@ -283,6 +292,12 @@ class MainWindow(QMainWindow):
         self.stt_timer = QtCore.QTimer()
         self.stt_timer.timeout.connect(self.listen_to_stt_transcriptions)
         self.stt_timer.start(200)  # check every 200ms
+
+        self.screen_capture_timer = QtCore.QTimer()
+        self.screen_capture_timer.timeout.connect(
+            self.listen_to_screen_capture_screenshots
+        )
+        self.screen_capture_timer.start(200)  # check every 200ms
 
     ###########################################################################
     # Screen creation
@@ -328,7 +343,7 @@ class MainWindow(QMainWindow):
         self.response_label = AnimatedGradientLabel("How can I help you?")
         self.response_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
-        self.response_scroll_area = QScrollArea()  # Store as instance variable
+        self.response_scroll_area = QScrollArea()
         self.response_scroll_area.setWidgetResizable(False)
         self.response_scroll_area.setHorizontalScrollBarPolicy(
             QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
@@ -340,7 +355,7 @@ class MainWindow(QMainWindow):
         self.response_scroll_area.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Fixed
         )
-        self.response_scroll_area.setFixedHeight(50)  # Adjust height as needed
+        self.response_scroll_area.setFixedHeight(50)
 
         self.response_scroll_area.setWidget(self.response_label)
 
@@ -383,16 +398,16 @@ class MainWindow(QMainWindow):
         )
         chat_button.clicked.connect(self.toggle_chat_panel)
 
-        self.speech_button = QPushButton()
-        self.speech_button.setIcon(
+        self.tts_button = QPushButton()
+        self.tts_button.setIcon(
             QColoredSVGIcon("assets/microphone.svg", QtGui.QColor("lightgray"))
         )
-        self.speech_button.setFixedSize(50, 50)
-        self.speech_button.setIconSize(self.speech_button.size() * 0.5)
-        self.speech_button.setCursor(
+        self.tts_button.setFixedSize(50, 50)
+        self.tts_button.setIconSize(self.tts_button.size() * 0.5)
+        self.tts_button.setCursor(
             QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         )
-        self.speech_button.setStyleSheet(
+        self.tts_button.setStyleSheet(
             """
                 QPushButton {
                     color: white;
@@ -404,14 +419,38 @@ class MainWindow(QMainWindow):
                 }
             """
         )
-        # Modified Connect speech_button to toggle_voice_recording
-        self.speech_button.clicked.connect(self.toggle_voice_recording)
+        self.tts_button.clicked.connect(self.toggle_stt_active)
+
+        self.screen_capture_button = QPushButton()
+        self.screen_capture_button.setIcon(
+            QColoredSVGIcon("assets/monitor.svg", QtGui.QColor("lightgray"))
+        )
+        self.screen_capture_button.setFixedSize(50, 50)
+        self.screen_capture_button.setIconSize(self.screen_capture_button.size() * 0.5)
+        self.screen_capture_button.setCursor(
+            QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        )
+        self.screen_capture_button.setStyleSheet(
+            """
+                QPushButton {
+                    color: white;
+                    border-radius: 25px;
+                    background-color: #282828;
+                }
+                QPushButton:hover {
+                    background-color: #2F2F2F;
+                }
+            """
+        )
+        self.screen_capture_button.clicked.connect(self.toggle_screen_capture_active)
 
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
         bottom_layout.addWidget(chat_button)
         bottom_layout.addSpacing(20)
-        bottom_layout.addWidget(self.speech_button)
+        bottom_layout.addWidget(self.tts_button)
+        bottom_layout.addSpacing(20)
+        bottom_layout.addWidget(self.screen_capture_button)
         bottom_layout.addStretch()
 
         # -------------------------
@@ -736,17 +775,14 @@ class MainWindow(QMainWindow):
         if "/" in self.vision_model_id:
             vision_provider, vision_name = self.vision_model_id.split("/", 1)
         else:
-            vision_provider, vision_name = "ollama", "vision-model-default"  # Replace with your defaults
-        vision_model_group_widgets["model_provider"].setCurrentText(
-            vision_provider
-        )
+            vision_provider, vision_name = (
+                "ollama",
+                "vision-model-default",
+            )  # Replace with your defaults
+        vision_model_group_widgets["model_provider"].setCurrentText(vision_provider)
         vision_model_group_widgets["model_name"].setText(vision_name)
-        vision_model_group_widgets["api_base"].setText(
-            self.vision_api_base or ""
-        )
-        vision_model_group_widgets["api_key"].setText(
-            self.vision_api_key or ""
-        )
+        vision_model_group_widgets["api_base"].setText(self.vision_api_base or "")
+        vision_model_group_widgets["api_key"].setText(self.vision_api_key or "")
 
         # Set initial values for Browser Use Model
         browser_use_model_group_widgets = self.settings_widgets["Browser Use Model"]
@@ -1069,6 +1105,7 @@ class MainWindow(QMainWindow):
 
             # Prepare the message payload
             message_payload = {
+                "source": "user",
                 "text": text,
                 "files": files,  # Removed the extra brackets to make it a list of file dicts
             }
@@ -1093,7 +1130,7 @@ class MainWindow(QMainWindow):
 
     def listen_to_agent_responses(self):
         """
-        Check if there's any new response from the agent.
+        Check if there's any new response from the agent thread.
         If so, display it and optionally send to TTS.
         """
         while True:
@@ -1125,7 +1162,7 @@ class MainWindow(QMainWindow):
 
     def listen_to_stt_transcriptions(self):
         """
-        Check if there's any new transcription from STT.
+        Check if there's any new transcription from the STT thread.
         If so, send it to the agent.
         """
         while True:
@@ -1135,7 +1172,30 @@ class MainWindow(QMainWindow):
                     break  # Sentinel value to ignore
                 logging.debug(f"Received transcription: {transcription}")
                 # Send transcription to agent
-                message_payload = {"text": transcription}
+                message_payload = {"source": "user", "text": transcription}
+                self.agent_inbound.put(message_payload)
+            except queue.Empty:
+                break  # queue is empty
+
+    def listen_to_screen_capture_screenshots(self):
+        """
+        Check if there are new screenshots from the screen_capture thread.
+        If so, send it to the agent.
+        """
+        while True:
+            try:
+                screenshot = self.screen_capture_outbound.get_nowait()
+                if screenshot is None:
+                    break  # Sentinel value to ignore
+                logging.debug(f"Received screenshot: {screenshot}")
+                # Send screenshot to agent
+                message_payload = {
+                    "source": "environment/vision",
+                    "text": screenshot['description'],
+                    "files": [{"type": FileType.IMAGE, "object": screenshot['image']}]
+                }
+                logging.debug(f"Message Payload: {message_payload}")
+
                 self.agent_inbound.put(message_payload)
             except queue.Empty:
                 break  # queue is empty
@@ -1364,15 +1424,9 @@ class MainWindow(QMainWindow):
                 "embedding_api_key", embedding_api_key
             )
 
-            self.settings_manager.set_settings_key(
-                "vision_model_id", vision_model_id
-            )
-            self.settings_manager.set_settings_key(
-                "vision_api_base", vision_api_base
-            )
-            self.settings_manager.set_settings_key(
-                "vision_api_key", vision_api_key
-            )
+            self.settings_manager.set_settings_key("vision_model_id", vision_model_id)
+            self.settings_manager.set_settings_key("vision_api_base", vision_api_base)
+            self.settings_manager.set_settings_key("vision_api_key", vision_api_key)
 
             self.settings_manager.set_settings_key(
                 "browser_use_model_id", browser_use_model_id
@@ -1426,25 +1480,48 @@ class MainWindow(QMainWindow):
     ###########################################################################
     # Voice Recording Logic
     ###########################################################################
-    def toggle_voice_recording(self):
-        if not self.is_voice_recording:
+    def toggle_stt_active(self):
+        if not self.is_stt_active:
             # Start voice recording
-            self.is_voice_recording = True
-            self.stt_is_recording_event.set()
+            self.is_stt_active = True
+            self.stt_is_active_event.set()
             # Change icon to stop.svg
-            self.speech_button.setIcon(
+            self.tts_button.setIcon(
                 QColoredSVGIcon("assets/stop.svg", QtGui.QColor("lightgray"))
             )
             logging.info("Voice recording started.")
         else:
             # Stop voice recording
-            self.is_voice_recording = False
-            self.stt_is_recording_event.clear()
+            self.is_stt_active = False
+            self.stt_is_active_event.clear()
             # Change icon back to microphone.svg
-            self.speech_button.setIcon(
+            self.tts_button.setIcon(
                 QColoredSVGIcon("assets/microphone.svg", QtGui.QColor("lightgray"))
             )
             logging.info("Voice recording stopped.")
+
+    ###########################################################################
+    # Screencapture Recording Logic
+    ###########################################################################
+    def toggle_screen_capture_active(self):
+        if not self.is_screen_capture_active:
+            # Start screen_capture
+            self.is_screen_capture_active = True
+            self.screen_capture_is_active_event.set()
+            # Change icon to stop.svg
+            self.screen_capture_button.setIcon(
+                QColoredSVGIcon("assets/stop.svg", QtGui.QColor("lightgray"))
+            )
+            logging.info("Screen capture started.")
+        else:
+            # Stop screen_capture
+            self.is_screen_capture_active = False
+            self.screen_capture_is_active_event.clear()
+            # Change icon back to monitor.svg
+            self.screen_capture_button.setIcon(
+                QColoredSVGIcon("assets/monitor.svg", QtGui.QColor("lightgray"))
+            )
+            logging.info("Screen capture stopped.")
 
 
 ###############################################################################
@@ -1546,8 +1623,11 @@ def main():
     # Create shared queues
     agent_inbound_queue = queue.Queue()  # User messages from UI -> ProxyAgent
     agent_outbound_queue = queue.Queue()  # ProxyAgent responses -> UI
-    tts_inbound_queue = queue.Queue()  # Text to speak from UI / ProxyAgent -> TTS
-    stt_outbound_queue = queue.Queue()  # Speech to text from STT -> UI
+    tts_inbound_queue = queue.Queue()  # Text to speak from UI & ProxyAgent -> TTS
+    stt_outbound_queue = queue.Queue()  # Speech to text from STT -> UI -> ProxyAgent
+    screen_capture_outbound_queue = (
+        queue.Queue()
+    )  # Screenshots from Screencapture -> UI -> ProxyAgent
 
     # Initialize Threads using the updated threading classes
     proxy_agent_thread = ProxyAgentThread(
@@ -1562,7 +1642,11 @@ def main():
 
     stt_thread = STTThread(
         outbound_queue=stt_outbound_queue,
-        # You can specify other optional parameters here if needed
+    )
+
+    screen_capture_thread = ScreenCaptureThread(
+        outbound_queue=screen_capture_outbound_queue,
+        settings_manager=settings_manager,
     )
 
     # Start the threads
@@ -1575,6 +1659,9 @@ def main():
     stt_thread.start()
     logging.info("STTThread started.")
 
+    screen_capture_thread.start()
+    logging.info("Screencapture started.")
+
     # Initialize the QApplication
     app = QApplication(sys.argv)
 
@@ -1586,7 +1673,9 @@ def main():
         agent_outbound=agent_outbound_queue,
         tts_inbound=tts_inbound_queue,
         stt_outbound=stt_outbound_queue,
-        stt_is_recording_event=stt_thread.is_recording_event,
+        stt_is_active_event=stt_thread.is_active_event,
+        screen_capture_outbound=screen_capture_outbound_queue,
+        screen_capture_is_active_event=screen_capture_thread.is_active_event,
     )
     window.setStyleSheet("background-color: #212121; color: white;")
     window.show()
@@ -1609,6 +1698,7 @@ def main():
         proxy_agent_thread.stop()
         tts_thread.stop()
         stt_thread.stop()
+        screen_capture_thread.stop()
 
         logging.info("All threads have been shut down.")
 
